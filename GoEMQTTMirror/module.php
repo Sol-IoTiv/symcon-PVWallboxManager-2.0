@@ -71,9 +71,15 @@ class GoEMQTTMirror extends IPSModule
         $topic   = (string)($data['Topic']   ?? '');
         $payload = (string)($data['Payload'] ?? '');
 
-        $baseWithSlash = rtrim($this->ReadPropertyString('BaseTopic'), '/') . '/';
+        $base = $this->ReadPropertyString('BaseTopic');
+        if (!is_string($base) || $base === '') {
+            // Instanz noch nicht vollständig initialisiert -> nicht craschen
+            $this->LogMessage('BaseTopic (Property) fehlt oder ist leer – ReceiveData verworfen.', KL_WARNING);
+            return;
+        }
+        $baseWithSlash = rtrim($base, '/') . '/';
         if ($topic === '' || strpos($topic, $baseWithSlash) !== 0) {
-            return; // andere Topics ignorieren
+            return;
         }
 
         $key = substr($topic, strlen($baseWithSlash)); // z.B. "nrg","car","amp","alw","psm","utc"
@@ -151,7 +157,7 @@ class GoEMQTTMirror extends IPSModule
         }
     }
 
-    // SUBSCRIBE (Symcon 8.1; maximal kompatibel)
+    // SUBSCRIBE (Symcon 8.1; strikt & kompatibel)
     private function mqttSubscribe(string $topic, int $qos = 0): void
     {
         $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
@@ -160,23 +166,17 @@ class GoEMQTTMirror extends IPSModule
         $this->SendDataToParent(json_encode([
             'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}',
             'PacketType'        => 8,                 // SUBSCRIBE
-
-            // Root-Felder: beide Varianten setzen
-            'Topic'             => $topic,           // <- einige Builds erwarten "Topic"
-            'TopicFilter'       => $topic,           // <- offizielle 8.1-Variante
-            'QoS'               => $qos,             // Abwärtskompatibel
-            'QualityOfService'  => $qos,             // 8.1-Pflicht
-
-            // Wird ignoriert, beruhigt aber starre Validatoren:
-            'Retain'            => false,
-
-            // Zusätzlich der Legacy-Block für ältere Builds:
+            // 8.1-Pflichtfelder auf Root-Ebene:
+            'TopicFilter'       => $topic,
+            'QualityOfService'  => $qos,
+            // Abwärtskompatibel für ältere Builds:
             'Topics'            => [[
-                'Topic'            => $topic,
                 'TopicFilter'      => $topic,
-                'QoS'              => $qos,
-                'QualityOfService' => $qos
+                'QualityOfService' => $qos,
+                'QoS'              => $qos
             ]]
+            // WICHTIG: KEIN 'Topic' und KEIN 'Retain' im Root setzen,
+            // damit der Frame garantiert nicht als PUBLISH fehlinterpretiert wird.
         ]));
     }
 
