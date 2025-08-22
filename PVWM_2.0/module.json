@@ -4,7 +4,7 @@
   "type": 3,
   "vendor": "PVWM",
   "aliases": ["GoE MQTT Mirror"],
-  "parentRequirements": ["{C6D2AEB3-6E1F-4B2E-8E69-3A1A00246850}"],
+  "parentRequirements": ["{8062CF2B-600E-41D6-AD4B-1BA66C32D6ED}"],
   "childRequirements": [],
   "implemented": ["{018EF6B5-AB94-40C6-AA53-46943E824ACF}"],
   "prefix": "GOEMQTT"
