@@ -151,7 +151,7 @@ class GoEMQTTMirror extends IPSModule
         }
     }
 
-    // SUBSCRIBE (Symcon 8.1, kompatibel)
+    // SUBSCRIBE (Symcon 8.1; maximal kompatibel)
     private function mqttSubscribe(string $topic, int $qos = 0): void
     {
         $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
@@ -160,12 +160,17 @@ class GoEMQTTMirror extends IPSModule
         $this->SendDataToParent(json_encode([
             'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}',
             'PacketType'        => 8,                 // SUBSCRIBE
-            // 8.1 Pflichtfelder auf Root-Ebene:
-            'TopicFilter'       => $topic,
-            'QualityOfService'  => $qos,
-            // Workaround: manche Builds prüfen generisch auf Retain (wird ignoriert):
+
+            // Root-Felder: beide Varianten setzen
+            'Topic'             => $topic,           // <- einige Builds erwarten "Topic"
+            'TopicFilter'       => $topic,           // <- offizielle 8.1-Variante
+            'QoS'               => $qos,             // Abwärtskompatibel
+            'QualityOfService'  => $qos,             // 8.1-Pflicht
+
+            // Wird ignoriert, beruhigt aber starre Validatoren:
             'Retain'            => false,
-            // Abwärtskompatibler Block für ältere Builds:
+
+            // Zusätzlich der Legacy-Block für ältere Builds:
             'Topics'            => [[
                 'Topic'            => $topic,
                 'TopicFilter'      => $topic,
