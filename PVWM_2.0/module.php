@@ -244,4 +244,6 @@ class GoEMQTTMirror extends IPSModule
         }
         return 0;
     }
+    
 }
+
