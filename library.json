@@ -1,0 +1,12 @@
+{
+    "id": "{{033F832B-457A-D27C-88A8-99EC9F8671C7}}",
+    "name": "PVWallboxManager",
+    "author": "Sol-IoTiv (Austria)",
+    "url": "https://github.com/Sol-IoTiv/symcon-PVWallboxMmanager-2.0",
+    "compatibility": {
+        "version": "7.1"
+    },
+    "version": "2.0b",
+    "build": 0,
+    "date": 0
+}
