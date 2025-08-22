@@ -143,14 +143,14 @@ class GoEMQTTMirror extends IPSModule
             return;
         }
 
-        // Symcon 8.1: SUBSCRIBE per TX-DataID
         $this->SendDataToParent(json_encode([
-            'DataID'     => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}',
+            'DataID'     => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}', // TX an MQTT-Gateway
             'PacketType' => 8, // SUBSCRIBE
             'Topics'     => [[
-                'Topic' => $topic,          // kompatibel zu älteren Builds
-                'TopicFilter' => $topic,    // kompatibel zu neueren Builds
-                'QoS'   => $qos,
+                // beide Keys für maximale Kompatibilität
+                'Topic'            => $topic,
+                'TopicFilter'      => $topic,
+                'QoS'              => $qos,
                 'QualityOfService' => $qos
             ]]
         ]));
@@ -164,17 +164,18 @@ class GoEMQTTMirror extends IPSModule
             return;
         }
 
-        // Symcon 8.1: PUBLISH per TX-DataID
         $this->SendDataToParent(json_encode([
-            'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}',
+            'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}', // TX an MQTT-Gateway
             'PacketType'        => 3, // PUBLISH
             'Topic'             => $topic,
             'Payload'           => $payload,
+            'Retain'            => $retain,
+            // beide Felder setzen
             'QoS'               => $qos,
-            'QualityOfService'  => $qos,
-            'Retain'            => $retain
+            'QualityOfService'  => $qos
         ]));
     }
+
 
     private function tryComputePowerFromNRG(string $payload): ?float
     {
