@@ -52,6 +52,13 @@ class GoEMQTTMirror extends IPSModule
             return;
         }
 
+        $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
+        if ($parent > 0) {
+            $pInst = IPS_GetInstance($parent);
+            $pMod  = IPS_GetModule($pInst['ModuleID']);
+            $this->LogMessage('Parent: '.($pMod['ModuleName'] ?? '??').' #'.$parent, KL_MESSAGE);
+}
+
         // Wildcard-Subscribe auf alle Keys unterhalb des BaseTopics
         $this->mqttSubscribe($base . '/+', 0);
 
@@ -152,6 +159,7 @@ class GoEMQTTMirror extends IPSModule
     }
 
     // SUBSCRIBE (Symcon 8.1 + abwärtskompatibel)
+    // SUBSCRIBE (Symcon 8.1)
     private function mqttSubscribe(string $topic, int $qos = 0): void
     {
         $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
@@ -159,15 +167,11 @@ class GoEMQTTMirror extends IPSModule
 
         $this->SendDataToParent(json_encode([
             'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}',
-            'PacketType'        => 8,
-            'TopicFilter'       => $topic,
-            'QualityOfService'  => $qos,
-            'Topics'            => [[ // Backward-Compat
-                'Topic'            => $topic,
-                'TopicFilter'      => $topic,
-                'QoS'              => $qos,
-                'QualityOfService' => $qos
-            ]]
+            'PacketType'        => 8,           // SUBSCRIBE
+            'TopicFilter'       => $topic,      // Pflichtfeld 8.1
+            'QualityOfService'  => $qos,        // Pflichtfeld 8.1
+            // Workaround: einige Builds prüfen 'Retain' generell
+            'Retain'            => false
         ]));
     }
 
