@@ -151,37 +151,42 @@ class GoEMQTTMirror extends IPSModule
         }
     }
 
-    // SUBSCRIBE (8.1 + abwärtskompatibel)
+    // SUBSCRIBE (Symcon 8.1 + abwärtskompatibel)
     private function mqttSubscribe(string $topic, int $qos = 0): void
     {
         $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
         if ($parent <= 0) { $this->LogMessage('MQTT SUB SKIP: kein Parent', KL_WARNING); return; }
 
         $this->SendDataToParent(json_encode([
-            'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}', // TX an MQTT-Gateway
-            'PacketType'        => 3,          // PUBLISH
-            'Topic'             => $topic,     // <- dein Topic
-            'Payload'           => $payload,   // <- dein Payload
-            'Retain'            => false,      // <-- Pflicht
-            'QualityOfService'  => 0,          // <-- Pflicht
-            'QoS'               => 0           // (Abwärtskompatibilität)
+            'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}',
+            'PacketType'        => 8,                 // <<< SUBSCRIBE!
+            // 8.1 Root-Felder:
+            'TopicFilter'       => $topic,
+            'QualityOfService'  => $qos,
+            // Abwärtskompatibilität:
+            'Topics'            => [[
+                'Topic'            => $topic,
+                'TopicFilter'      => $topic,
+                'QoS'              => $qos,
+                'QualityOfService' => $qos
+            ]]
         ]));
     }
 
-    // PUBLISH (8.1 + abwärtskompatibel)
+    // PUBLISH (Symcon 8.1 + abwärtskompatibel)
     private function mqttPublish(string $topic, string $payload, int $qos = 0, bool $retain = false): void
     {
         $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
         if ($parent <= 0) { $this->LogMessage('MQTT PUB SKIP: kein Parent', KL_WARNING); return; }
 
         $this->SendDataToParent(json_encode([
-            'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}', // TX an MQTT-Gateway
-            'PacketType'        => 3,          // PUBLISH
-            'Topic'             => $topic,     // <- dein Topic
-            'Payload'           => $payload,   // <- dein Payload
-            'Retain'            => false,      // <-- Pflicht
-            'QualityOfService'  => 0,          // <-- Pflicht
-            'QoS'               => 0           // (Abwärtskompatibilität)
+            'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}',
+            'PacketType'        => 3,                 // PUBLISH
+            'Topic'             => $topic,
+            'Payload'           => $payload,
+            'Retain'            => $retain,           // Pflicht in 8.1
+            'QualityOfService'  => $qos,              // Pflicht in 8.1
+            'QoS'               => $qos               // Abwärtskompatibel
         ]));
     }
 
