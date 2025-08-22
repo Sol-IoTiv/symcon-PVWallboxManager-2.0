@@ -138,44 +138,46 @@ class GoEMQTTMirror extends IPSModule
     private function mqttSubscribe(string $topic, int $qos = 0): void
     {
         $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
-        if ($parent <= 0) {
-            $this->LogMessage('MQTT SUB SKIP: kein Parent', KL_WARNING);
-            return;
-        }
+        if ($parent <= 0) { $this->LogMessage('MQTT SUB SKIP: kein Parent', KL_WARNING); return; }
 
-        $this->SendDataToParent(json_encode([
-            'DataID'     => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}', // TX an MQTT-Gateway
-            'PacketType' => 8, // SUBSCRIBE
-            'Topics'     => [[
-                // beide Keys für maximale Kompatibilität
+        $msg = [
+            'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}',
+            'PacketType'        => 8,            // SUBSCRIBE
+            // 8.1 erwartet diese Felder auf Root-Ebene:
+            'TopicFilter'       => $topic,
+            'QualityOfService'  => $qos,
+
+            // Kompatibilität zu älteren Builds (werden von 8.1 ignoriert):
+            'Topics' => [[
                 'Topic'            => $topic,
                 'TopicFilter'      => $topic,
                 'QoS'              => $qos,
                 'QualityOfService' => $qos
             ]]
-        ]));
+        ];
+
+        $this->SendDataToParent(json_encode($msg));
     }
 
     private function mqttPublish(string $topic, string $payload, int $qos = 0, bool $retain = false): void
     {
         $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
-        if ($parent <= 0) {
-            $this->LogMessage('MQTT PUB SKIP: kein Parent', KL_WARNING);
-            return;
-        }
+        if ($parent <= 0) { $this->LogMessage('MQTT PUB SKIP: kein Parent', KL_WARNING); return; }
 
-        $this->SendDataToParent(json_encode([
-            'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}', // TX an MQTT-Gateway
-            'PacketType'        => 3, // PUBLISH
+        $msg = [
+            'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}',
+            'PacketType'        => 3,            // PUBLISH
             'Topic'             => $topic,
             'Payload'           => $payload,
             'Retain'            => $retain,
-            // beide Felder setzen
-            'QoS'               => $qos,
-            'QualityOfService'  => $qos
-        ]));
-    }
+            // 8.1 erwartet dieses Feld:
+            'QualityOfService'  => $qos,
+            // für ältere Builds zusätzlich:
+            'QoS'               => $qos
+        ];
 
+        $this->SendDataToParent(json_encode($msg));
+}
 
     private function tryComputePowerFromNRG(string $payload): ?float
     {
