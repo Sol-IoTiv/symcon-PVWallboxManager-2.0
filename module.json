@@ -1,0 +1,11 @@
+{
+  "id": "{8A9D5F7C-0FBB-4F9C-BD75-7B6C0D1D7B10}",
+  "name": "GoEMQTTMirror",
+  "type": 3,
+  "vendor": "PVWM",
+  "aliases": ["GoE MQTT Mirror"],
+  "parentRequirements": ["{3CFF0FD9-E306-41DB-9B5A-9D06D38576C3}"],
+  "childRequirements": [],
+  "implemented": ["{018EF6B5-AB94-40C6-AA53-46943E824ACF}"],
+  "prefix": "GOEMQTT"
+}
