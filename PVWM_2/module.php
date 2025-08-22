@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-class PVWM_2.0 extends IPSModule
+class PVWM_2 extends IPSModule
 {
     // ---------------------------
     // Create
