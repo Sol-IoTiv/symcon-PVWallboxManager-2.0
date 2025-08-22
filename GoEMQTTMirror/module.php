@@ -52,13 +52,6 @@ class GoEMQTTMirror extends IPSModule
             return;
         }
 
-        $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
-        if ($parent > 0) {
-            $pInst = IPS_GetInstance($parent);
-            $pMod  = IPS_GetModule($pInst['ModuleID']);
-            $this->LogMessage('Parent: '.($pMod['ModuleName'] ?? '??').' #'.$parent, KL_MESSAGE);
-        }
-
         // Wildcard-Subscribe auf alle Keys unterhalb des BaseTopics
         $this->mqttSubscribe($base . '/+', 0);
 
