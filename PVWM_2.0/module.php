@@ -218,32 +218,53 @@ class GoEMQTTMirror extends IPSModule
 
     /**
      * Findet genau EIN MQTT-Gateway (Server ODER Client) und hängt diese Instanz darunter.
-     * Gibt die Parent-ID zurück oder 0 bei Misserfolg.
+     * Rückgabe: Parent-ID oder 0 (wenn keins/einschließlich Mehrfachtreffer).
      */
     private function autoAttachSingleMqttGateway(): int
     {
-        $tx = '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}'; // Parent muss diese DataID implementieren
+        // DataID, die MQTT-Gateways (Server/Client) zum Senden implementieren (TX)
+        $txDataId = '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}';
+
         $candidates = [];
+
         foreach (IPS_GetInstanceList() as $iid) {
-            $mod = IPS_GetModule(IPS_GetInstance($iid)['ModuleID']);
-            $impl = $mod['Implemented'] ?? [];
-            if (in_array($tx, $impl, true)) {
+            if (!@IPS_InstanceExists($iid)) {
+                continue;
+            }
+            $inst = @IPS_GetInstance($iid);
+            if (!is_array($inst)) {
+                continue;
+            }
+            // Safer: key prüfen
+            $moduleID = $inst['ModuleID'] ?? '';
+            if (!is_string($moduleID) || $moduleID === '') {
+                // keine gültige Modul-GUID → ignorieren
+                continue;
+            }
+            $mod = @IPS_GetModule($moduleID);
+            if (!is_array($mod)) {
+                continue;
+            }
+            $implemented = $mod['Implemented'] ?? [];
+            if (is_array($implemented) && in_array($txDataId, $implemented, true)) {
+                // Das ist ein MQTT-Gateway (Server ODER Client)
                 $candidates[] = $iid;
             }
         }
+
         if (count($candidates) === 1) {
             $pid = $candidates[0];
             @IPS_SetParent($this->InstanceID, $pid);
             $this->LogMessage("Auto-Parent gesetzt auf MQTT-Gateway #$pid", KL_MESSAGE);
             return $pid;
         }
+
         if (count($candidates) > 1) {
-            $this->LogMessage('Mehrere MQTT-Gateways gefunden. Bitte Parent manuell wählen.', KL_WARNING);
+            $this->LogMessage('Mehrere MQTT-Gateways gefunden. Bitte Parent manuell wählen (Gateway ändern…).', KL_WARNING);
         } else {
-            $this->LogMessage('Kein MQTT-Gateway gefunden. Bitte MQTT Server oder Client anlegen.', KL_WARNING);
+            $this->LogMessage('Kein MQTT-Gateway gefunden. Bitte MQTT Server oder MQTT Client anlegen.', KL_WARNING);
         }
         return 0;
     }
-    
 }
 
