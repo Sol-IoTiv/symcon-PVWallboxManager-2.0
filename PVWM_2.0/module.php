@@ -151,23 +151,18 @@ class GoEMQTTMirror extends IPSModule
         }
     }
 
-    // ---- MQTT SUBSCRIBE (Symcon 8.1 + abwärtskompatibel) ----
+    // SUBSCRIBE (8.1 + abwärtskompatibel)
     private function mqttSubscribe(string $topic, int $qos = 0): void
     {
         $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
-        if ($parent <= 0) {
-            $this->LogMessage('MQTT SUB SKIP: kein Parent', KL_WARNING);
-            return;
-        }
+        if ($parent <= 0) { $this->LogMessage('MQTT SUB SKIP: kein Parent', KL_WARNING); return; }
 
         $this->SendDataToParent(json_encode([
             'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}',
             'PacketType'        => 8, // SUBSCRIBE
-            // 8.1 erwartet Root-Felder:
             'TopicFilter'       => $topic,
             'QualityOfService'  => $qos,
-            // zusätzlich für ältere Builds:
-            'Topics' => [[
+            'Topics'            => [[ // Backward-Compat
                 'Topic'            => $topic,
                 'TopicFilter'      => $topic,
                 'QoS'              => $qos,
@@ -176,7 +171,7 @@ class GoEMQTTMirror extends IPSModule
         ]));
     }
 
-    // ---- MQTT PUBLISH (Symcon 8.1 + abwärtskompatibel) ----
+    // PUBLISH (8.1 + abwärtskompatibel)
     private function mqttPublish(string $topic, string $payload, int $qos = 0, bool $retain = false): void
     {
         $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
@@ -187,11 +182,9 @@ class GoEMQTTMirror extends IPSModule
             'PacketType'        => 3, // PUBLISH
             'Topic'             => $topic,
             'Payload'           => $payload,
-            // Pflichtfelder in 8.1:
-            'Retain'            => $retain,
-            'QualityOfService'  => $qos,
-            // Abwärtskompatibel:
-            'QoS'               => $qos
+            'Retain'            => $retain,          // **Pflicht**
+            'QualityOfService'  => $qos,             // **Pflicht**
+            'QoS'               => $qos              // kompatibel zu älteren Builds
         ]));
     }
 
