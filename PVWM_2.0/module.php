@@ -158,16 +158,13 @@ class GoEMQTTMirror extends IPSModule
         if ($parent <= 0) { $this->LogMessage('MQTT SUB SKIP: kein Parent', KL_WARNING); return; }
 
         $this->SendDataToParent(json_encode([
-            'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}',
-            'PacketType'        => 8, // SUBSCRIBE
-            'TopicFilter'       => $topic,
-            'QualityOfService'  => $qos,
-            'Topics'            => [[ // Backward-Compat
-                'Topic'            => $topic,
-                'TopicFilter'      => $topic,
-                'QoS'              => $qos,
-                'QualityOfService' => $qos
-            ]]
+            'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}', // TX an MQTT-Gateway
+            'PacketType'        => 3,          // PUBLISH
+            'Topic'             => $topic,     // <- dein Topic
+            'Payload'           => $payload,   // <- dein Payload
+            'Retain'            => false,      // <-- Pflicht
+            'QualityOfService'  => 0,          // <-- Pflicht
+            'QoS'               => 0           // (Abwärtskompatibilität)
         ]));
     }
 
@@ -178,13 +175,13 @@ class GoEMQTTMirror extends IPSModule
         if ($parent <= 0) { $this->LogMessage('MQTT PUB SKIP: kein Parent', KL_WARNING); return; }
 
         $this->SendDataToParent(json_encode([
-            'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}',
-            'PacketType'        => 3, // PUBLISH
-            'Topic'             => $topic,
-            'Payload'           => $payload,
-            'Retain'            => $retain,          // **Pflicht**
-            'QualityOfService'  => $qos,             // **Pflicht**
-            'QoS'               => $qos              // kompatibel zu älteren Builds
+            'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}', // TX an MQTT-Gateway
+            'PacketType'        => 3,          // PUBLISH
+            'Topic'             => $topic,     // <- dein Topic
+            'Payload'           => $payload,   // <- dein Payload
+            'Retain'            => false,      // <-- Pflicht
+            'QualityOfService'  => 0,          // <-- Pflicht
+            'QoS'               => 0           // (Abwärtskompatibilität)
         ]));
     }
 
