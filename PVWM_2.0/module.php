@@ -134,48 +134,45 @@ class GoEMQTTMirror extends IPSModule
         }
     }
 
+    // ---- MQTT SUBSCRIBE (8.1 + abwärtskompatibel) ----
     private function mqttSubscribe(string $topic, int $qos = 0): void
     {
         $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
         if ($parent <= 0) { $this->LogMessage('MQTT SUB SKIP: kein Parent', KL_WARNING); return; }
 
-        $msg = [
+        $this->SendDataToParent(json_encode([
             'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}',
-            'PacketType'        => 8,            // SUBSCRIBE
-            // 8.1 erwartet diese Felder auf Root-Ebene:
+            'PacketType'        => 8, // SUBSCRIBE
+            // 8.1 erwartet Root-Felder:
             'TopicFilter'       => $topic,
             'QualityOfService'  => $qos,
-
-            // Kompatibilität zu älteren Builds (werden von 8.1 ignoriert):
-            'Topics' => [[
+            // für ältere Builds zusätzlich:
+            'Topics'            => [[
                 'Topic'            => $topic,
                 'TopicFilter'      => $topic,
                 'QoS'              => $qos,
                 'QualityOfService' => $qos
             ]]
-        ];
-
-        $this->SendDataToParent(json_encode($msg));
+        ]));
     }
 
+    // ---- MQTT PUBLISH (8.1 + abwärtskompatibel) ----
     private function mqttPublish(string $topic, string $payload, int $qos = 0, bool $retain = false): void
     {
         $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
         if ($parent <= 0) { $this->LogMessage('MQTT PUB SKIP: kein Parent', KL_WARNING); return; }
 
-        $msg = [
+        $this->SendDataToParent(json_encode([
             'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}',
-            'PacketType'        => 3,            // PUBLISH
+            'PacketType'        => 3, // PUBLISH
             'Topic'             => $topic,
             'Payload'           => $payload,
+            // 8.1 Pflichtfelder:
             'Retain'            => $retain,
-            // 8.1 erwartet dieses Feld:
             'QualityOfService'  => $qos,
             // für ältere Builds zusätzlich:
             'QoS'               => $qos
-        ];
-
-        $this->SendDataToParent(json_encode($msg));
+        ]));
     }
 
     // Holt PTotal (Index 11, 0-basiert) aus nrg → int Watt (ohne Skalierung)
