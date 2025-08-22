@@ -108,9 +108,9 @@ class GoEMQTTMirror extends IPSModule
                 $this->SetValueSafe('NRG_RAW', $payload);
 
                 // Versuch, Gesamtleistung abzuleiten (robust, ohne festes Mapping)
-                $pTotal = $this->tryComputePowerFromNRG($payload);
-                if ($pTotal !== null) {
-                    $this->SetValueSafe('Leistung_W', (int)round($pTotal));
+                $w = $this->nrgTotalW($payload); // liest nrg[11]
+                if ($w !== null) {
+                    $this->SetValueSafe('Leistung_W', $w);
                 }
                 break;
 
@@ -179,24 +179,27 @@ class GoEMQTTMirror extends IPSModule
         $this->SendDataToParent(json_encode($msg));
 }
 
-    private function tryComputePowerFromNRG(string $payload): ?float
+    private function nrgTotalW(string $payload): ?int
     {
-        $payload = trim($payload);
+        $p = trim($payload, "\" \t\n\r\0\x0B");
 
-        // JSON-Array? → Summe aller numerischen Werte
-        if ($payload !== '' && $payload[0] === '[') {
-            $arr = json_decode($payload, true);
-            if (is_array($arr) && !empty($arr)) {
-                $sum = 0.0;
-                foreach ($arr as $v) {
-                    if (is_numeric($v)) {
-                        $sum += (float)$v;
-                    }
-                }
-                return (is_finite($sum) && $sum >= 0) ? $sum : null;
+        // JSON-Array?
+        if ($p !== '' && $p[0] === '[') {
+            $arr = json_decode($p, true);
+            if (is_array($arr) && isset($arr[11]) && is_numeric($arr[11])) {
+                return (int)round((float)$arr[11]); // PTotal (Index 11)
             }
             return null;
         }
+
+        // CSV (Komma/Semikolon)
+        $parts = preg_split('/[;,]/', $p);
+        if (is_array($parts) && isset($parts[11]) && is_numeric($parts[11])) {
+            return (int)round((float)$parts[11]); // PTotal (Index 11)
+        }
+
+        return null;
+    }
 
         // CSV (Komma/Semikolon) → Summe numerischer Werte
         $parts = preg_split('/[;,]/', $payload);
