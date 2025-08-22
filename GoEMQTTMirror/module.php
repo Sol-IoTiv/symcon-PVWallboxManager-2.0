@@ -3,6 +3,10 @@ declare(strict_types=1);
 
 class GoEMQTTMirror extends IPSModule
 {
+    // MQTT DataIDs (Symcon 8.1)
+    private const MQTT_TX = '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}'; // Child -> Parent (SUB/PUB)
+    private const MQTT_RX = '{7F7632D9-FA40-4F38-8DEA-C83CD4325A32}'; // Parent -> Child (Empfang)
+
     // ---------------------------
     // Create
     // ---------------------------
@@ -13,17 +17,17 @@ class GoEMQTTMirror extends IPSModule
         // Dein go-e Basis-Topic hier anpassen
         $this->RegisterPropertyString('BaseTopic', 'go-eCharger/285450');
 
-        // Kern-Variablen (ohne eigene Profile, nutzt Standard ~Watt / ~Intensity.Ampere)
-        $this->RegisterVariableInteger('Ampere_A',          'Ampere [A]',               '',                  10);
-        $this->RegisterVariableInteger('Leistung_W',        'Leistung [W]',             '~Watt',             20);
-        $this->RegisterVariableBoolean('FahrzeugVerbunden', 'Fahrzeug verbunden',       '~Switch',           30);
-        $this->RegisterVariableInteger('ALW',               'ALW (0/1)',                '',                  40);
-        $this->RegisterVariableInteger('FRC',               'FRC (0/1/2)',              '',                  50);
-        $this->RegisterVariableInteger('Phasenmodus',       'Phasenmodus (1/2)',        '',                  60);
-        $this->RegisterVariableString('LastSeenUTC',        'Zuletzt gesehen (UTC)',    '',                  70);
+        // Kern-Variablen
+        $this->RegisterVariableInteger('Ampere_A',          'Ampere [A]',               '',       10);
+        $this->RegisterVariableInteger('Leistung_W',        'Leistung [W]',             '~Watt',  20);
+        $this->RegisterVariableBoolean('FahrzeugVerbunden', 'Fahrzeug verbunden',       '~Switch',30);
+        $this->RegisterVariableInteger('ALW',               'ALW (0/1)',                '',       40);
+        $this->RegisterVariableInteger('FRC',               'FRC (0/1/2)',              '',       50);
+        $this->RegisterVariableInteger('Phasenmodus',       'Phasenmodus (1/2)',        '',       60);
+        $this->RegisterVariableString('LastSeenUTC',        'Zuletzt gesehen (UTC)',    '',       70);
 
-        // Debug-Helfer
-        $this->RegisterVariableString('NRG_RAW',            'NRG (roh)',                '~TextBox',          90);
+        // Debug
+        $this->RegisterVariableString('NRG_RAW',            'NRG (roh)',                '~TextBox', 90);
     }
 
     // ---------------------------
@@ -33,23 +37,29 @@ class GoEMQTTMirror extends IPSModule
     {
         parent::ApplyChanges();
 
-        $base = rtrim($this->ReadPropertyString('BaseTopic'), '/');
+        $base = rtrim((string)$this->ReadPropertyString('BaseTopic'), '/');
         if ($base === '') {
             $this->LogMessage('BaseTopic ist leer.', KL_ERROR);
             $this->SetStatus(IS_EBASE + 1);
             return;
         }
 
-        // Falls kein Parent gesetzt ist und genau EIN MQTT-Gateway existiert → automatisch verbinden (Quality-of-Life)
+        // Falls kein Parent gesetzt ist -> versuchen automatisch anzuhängen
         $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
         if ($parent <= 0) {
             $parent = $this->autoAttachSingleMqttGateway();
         }
-
         if ($parent <= 0) {
             $this->LogMessage('Kein Parent (MQTT) verknüpft.', KL_ERROR);
             $this->SetStatus(IS_EBASE + 2);
             return;
+        }
+
+        // Debug: Parent anzeigen
+        $pInst = @IPS_GetInstance($parent);
+        if (is_array($pInst)) {
+            $pMod  = @IPS_GetModule($pInst['ModuleID']);
+            $this->LogMessage('Parent: '.(($pMod['ModuleName'] ?? '??')).' #'.$parent, KL_MESSAGE);
         }
 
         // Wildcard-Subscribe auf alle Keys unterhalb des BaseTopics
@@ -64,22 +74,21 @@ class GoEMQTTMirror extends IPSModule
     public function ReceiveData($JSONString)
     {
         $data = json_decode($JSONString, true);
-        if (!is_array($data)) {
-            return;
-        }
+        if (!is_array($data)) return;
 
         $topic   = (string)($data['Topic']   ?? '');
         $payload = (string)($data['Payload'] ?? '');
 
+        // Guard: BaseTopic muss gesetzt sein
         $base = $this->ReadPropertyString('BaseTopic');
         if (!is_string($base) || $base === '') {
-            // Instanz noch nicht vollständig initialisiert -> nicht craschen
-            $this->LogMessage('BaseTopic (Property) fehlt oder ist leer – ReceiveData verworfen.', KL_WARNING);
+            $this->LogMessage('BaseTopic fehlt/leer – ReceiveData verworfen.', KL_WARNING);
             return;
         }
+
         $baseWithSlash = rtrim($base, '/') . '/';
         if ($topic === '' || strpos($topic, $baseWithSlash) !== 0) {
-            return;
+            return; // andere Topics ignorieren
         }
 
         $key = substr($topic, strlen($baseWithSlash)); // z.B. "nrg","car","amp","alw","psm","utc"
@@ -137,7 +146,7 @@ class GoEMQTTMirror extends IPSModule
                 break;
 
             default:
-                // Unbekannte Keys ignorieren (oder hier dynamische Variablen anlegen)
+                // Unbekannte Keys ignorieren (oder: dynamisch anlegen)
                 break;
         }
     }
@@ -157,67 +166,68 @@ class GoEMQTTMirror extends IPSModule
         }
     }
 
-    class GoEMQTTMirror extends IPSModule
-    {
-        private const MQTT_TX = '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}';
-        private const MQTT_RX = '{7F7632D9-FA40-4F38-8DEA-C83CD4325A32}';
-
-        // ... und dann:
-        private function mqttSubscribe(string $topic, int $qos = 0): void {
-            $this->SendDataToParent(json_encode([
-                'DataID'           => self::MQTT_TX,
-                'PacketType'       => 8,
-                'TopicFilter'      => $topic,
-                'QualityOfService' => $qos,
-                'Topics'           => [[
-                    'TopicFilter'      => $topic,
-                    'QualityOfService' => $qos,
-                    'QoS'               => $qos
-                ]]
-            ]));
-        }
-
-        private function mqttPublish(string $topic, string $payload, int $qos = 0, bool $retain = false): void {
-            $this->SendDataToParent(json_encode([
-                'DataID'           => self::MQTT_TX,
-                'PacketType'       => 3,
-                'Topic'            => $topic,
-                'Payload'          => $payload,
-                'Retain'           => $retain,
-                'QualityOfService' => $qos,
-                'QoS'              => $qos
-            ]));
-        }
-    }
-
     // Kleiner Helfer für Topics
     private function bt(string $k): string
     {
         return rtrim($this->ReadPropertyString('BaseTopic'), '/') . '/' . $k;
     }
 
+    // SUBSCRIBE (Symcon 8.1; kompatibel)
+    private function mqttSubscribe(string $topic, int $qos = 0): void
+    {
+        $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
+        if ($parent <= 0) { $this->LogMessage('MQTT SUB SKIP: kein Parent', KL_WARNING); return; }
+
+        $this->SendDataToParent(json_encode([
+            'DataID'            => self::MQTT_TX,
+            'PacketType'        => 8,                 // SUBSCRIBE
+            // 8.1-Pflichtfelder:
+            'TopicFilter'       => $topic,
+            'QualityOfService'  => $qos,
+            // Abwärtskompatibel für ältere Builds:
+            'Topics'            => [[
+                'TopicFilter'      => $topic,
+                'QualityOfService' => $qos,
+                'QoS'              => $qos
+            ]]
+        ]));
+    }
+
+    // PUBLISH (Symcon 8.1; kompatibel)
+    private function mqttPublish(string $topic, string $payload, int $qos = 0, bool $retain = false): void
+    {
+        $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
+        if ($parent <= 0) { $this->LogMessage('MQTT PUB SKIP: kein Parent', KL_WARNING); return; }
+
+        $this->SendDataToParent(json_encode([
+            'DataID'            => self::MQTT_TX,
+            'PacketType'        => 3,                 // PUBLISH
+            'Topic'             => $topic,
+            'Payload'           => $payload,
+            'Retain'            => $retain,           // Pflicht in 8.1
+            'QualityOfService'  => $qos,              // Pflicht in 8.1
+            'QoS'               => $qos               // Abwärtskompatibel
+        ]));
+    }
+
     /**
      * Findet genau EIN MQTT-Gateway (Server ODER Client) und hängt diese Instanz darunter.
-     * Rückgabe: Parent-ID oder 0 (wenn keins/einschließlich Mehrfachtreffer).
+     * Rückgabe: Parent-ID oder 0.
      */
     private function autoAttachSingleMqttGateway(): int
     {
-        $txDataId = '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}'; // MQTT TX-DataID (Server/Client)
+        $txDataId = self::MQTT_TX; // Gateways implementieren diese TX-DataID
 
         $candidates = [];
         foreach (IPS_GetInstanceList() as $iid) {
             if (!@IPS_InstanceExists($iid)) { continue; }
             $inst = @IPS_GetInstance($iid);
             if (!is_array($inst)) { continue; }
+            if (!isset($inst['ModuleID']) || !is_string($inst['ModuleID']) || $inst['ModuleID'] === '') { continue; }
 
-            // Sicherstellen, dass eine gültige ModuleID existiert
-            if (!isset($inst['ModuleID']) || !is_string($inst['ModuleID']) || $inst['ModuleID'] === '') {
-                continue;
-            }
-            $moduleID = $inst['ModuleID'];
-
-            $mod = @IPS_GetModule($moduleID);
+            $mod = @IPS_GetModule($inst['ModuleID']);
             if (!is_array($mod)) { continue; }
+
             $implemented = $mod['Implemented'] ?? [];
             if (is_array($implemented) && in_array($txDataId, $implemented, true)) {
                 $candidates[] = $iid;
@@ -230,6 +240,7 @@ class GoEMQTTMirror extends IPSModule
             $this->LogMessage("Auto-Parent gesetzt auf MQTT-Gateway #$pid", KL_MESSAGE);
             return $pid;
         }
+
         if (count($candidates) > 1) {
             $this->LogMessage('Mehrere MQTT-Gateways gefunden. Bitte Parent manuell wählen (Gateway ändern…).', KL_WARNING);
         } else {
@@ -237,5 +248,4 @@ class GoEMQTTMirror extends IPSModule
         }
         return 0;
     }
-
 }
