@@ -104,11 +104,10 @@ class GoEMQTTMirror extends IPSModule
                 break;
 
             case 'nrg':
-                // Rohdaten speichern (Debug)
+                // optional fürs Debug:
                 $this->SetValueSafe('NRG_RAW', $payload);
 
-                // Versuch, Gesamtleistung abzuleiten (robust, ohne festes Mapping)
-                $w = $this->nrgTotalW($payload); // liest nrg[11]
+                $w = $this->nrgTotalW($payload);
                 if ($w !== null) {
                     $this->SetValueSafe('Leistung_W', $w);
                 }
@@ -177,25 +176,29 @@ class GoEMQTTMirror extends IPSModule
         ];
 
         $this->SendDataToParent(json_encode($msg));
-}
+    }
 
+    // Holt PTotal (Index 11, 0-basiert) aus nrg → int Watt (ohne Skalierung)
     private function nrgTotalW(string $payload): ?int
     {
-        $p = trim($payload, "\" \t\n\r\0\x0B");
+        $p = trim($payload, "\" \t\n\r\0\x0B"); // evtl. Anführungszeichen entfernen
+        if ($p === '') {
+            return null;
+        }
 
         // JSON-Array?
-        if ($p !== '' && $p[0] === '[') {
+        if ($p[0] === '[') {
             $arr = json_decode($p, true);
-            if (is_array($arr) && isset($arr[11]) && is_numeric($arr[11])) {
-                return (int)round((float)$arr[11]); // PTotal (Index 11)
+            if (is_array($arr) && array_key_exists(11, $arr) && is_numeric($arr[11])) {
+                return (int)round((float)$arr[11]);
             }
             return null;
         }
 
         // CSV (Komma/Semikolon)
         $parts = preg_split('/[;,]/', $p);
-        if (is_array($parts) && isset($parts[11]) && is_numeric($parts[11])) {
-            return (int)round((float)$parts[11]); // PTotal (Index 11)
+        if (is_array($parts) && array_key_exists(11, $parts) && is_numeric($parts[11])) {
+            return (int)round((float)$parts[11]);
         }
 
         return null;
