@@ -123,20 +123,28 @@ class GoEMQTTMirror extends IPSModule
         }
     }
 
-    private function mqttSubscribe(string $topic, int $qos = 0): void
-    {
-        $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
-        if ($parent <= 0) {
-            $this->LogMessage('MQTT SUB SKIP: kein Parent', KL_WARNING);
-            return;
-        }
-        $msg = [
-            'DataID'     => '{3CFF0FD9-E306-41DB-9B5A-9D06D38576C3}',
-            'PacketType' => 8, // SUBSCRIBE
-            'Topics'     => [['Topic' => $topic, 'QoS' => $qos]]
-        ];
-        $this->SendDataToParent(json_encode($msg));
-    }
+private function mqttSubscribe(string $topic, int $qos = 0): void {
+    $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
+    if ($parent <= 0) return;
+    $this->SendDataToParent(json_encode([
+        'DataID'     => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}', // <<<<
+        'PacketType' => 8, // SUBSCRIBE
+        'Topics'     => [['Topic' => $topic, 'QoS' => $qos]]
+    ]));
+}
+
+private function mqttPublish(string $topic, string $payload, int $qos = 0, bool $retain = false): void {
+    $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
+    if ($parent <= 0) return;
+    $this->SendDataToParent(json_encode([
+        'DataID'          => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}', // <<<<
+        'PacketType'      => 3, // PUBLISH
+        'Topic'           => $topic,
+        'Payload'         => $payload,
+        'QualityOfService'=> $qos,
+        'Retain'          => $retain
+    ]));
+}
 
     private function tryComputePowerFromNRG(string $payload): ?float
     {
