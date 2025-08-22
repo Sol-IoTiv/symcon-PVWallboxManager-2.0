@@ -10,7 +10,7 @@ class GoEMQTTMirror extends IPSModule
         $this->RegisterPropertyString('BaseTopic', 'go-eCharger/285450'); // <<< anpassen
 
         // Kern-Variablen
-        $this->RegisterVariableInteger('Ampere_A',         'Ampere [A]',     '~Intensity.Ampere', 10);
+        $this->RegisterVariableInteger('Ampere_A',         'Ampere [A]',     '', 10);
         $this->RegisterVariableInteger('Leistung_W',       'Leistung [W]',   '~Watt',             20);
         $this->RegisterVariableBoolean('FahrzeugVerbunden','Fahrzeug verbunden', '~Switch',        30);
         $this->RegisterVariableInteger('ALW',              'ALW (0/1)',      '',                  40);
