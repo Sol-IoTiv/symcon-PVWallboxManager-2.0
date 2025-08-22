@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-class GoEMQTTMirror extends IPSModule
+class PVWM_2.0 extends IPSModule
 {
     // ---------------------------
     // Create
@@ -159,12 +159,10 @@ class GoEMQTTMirror extends IPSModule
 
         $this->SendDataToParent(json_encode([
             'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}',
-            'PacketType'        => 8,                 // <<< SUBSCRIBE!
-            // 8.1 Root-Felder:
+            'PacketType'        => 8,
             'TopicFilter'       => $topic,
             'QualityOfService'  => $qos,
-            // Abwärtskompatibilität:
-            'Topics'            => [[
+            'Topics'            => [[ // Backward-Compat
                 'Topic'            => $topic,
                 'TopicFilter'      => $topic,
                 'QoS'              => $qos,
@@ -181,13 +179,19 @@ class GoEMQTTMirror extends IPSModule
 
         $this->SendDataToParent(json_encode([
             'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}',
-            'PacketType'        => 3,                 // PUBLISH
+            'PacketType'        => 3,
             'Topic'             => $topic,
             'Payload'           => $payload,
-            'Retain'            => $retain,           // Pflicht in 8.1
-            'QualityOfService'  => $qos,              // Pflicht in 8.1
-            'QoS'               => $qos               // Abwärtskompatibel
+            'Retain'            => $retain,          // **Pflicht**
+            'QualityOfService'  => $qos,             // **Pflicht**
+            'QoS'               => $qos              // Abwärtskompatibel
         ]));
+    }
+
+    // Kleiner Helfer für Topics
+    private function bt(string $k): string
+    {
+        return rtrim($this->ReadPropertyString('BaseTopic'), '/') . '/' . $k;
     }
 
     /**
