@@ -107,7 +107,24 @@ class GoEMQTTMirror extends IPSModule
                 // optional fürs Debug:
                 $this->SetValueSafe('NRG_RAW', $payload);
 
-                $w = $this->nrgTotalW($payload);
+                // Nur PTotal (Index 11) auf Leistung_W schreiben
+                $p = trim($payload, "\" \t\n\r\0\x0B");
+                $w = null;
+
+                if ($p !== '' && $p[0] === '[') {
+                    // JSON-Array
+                    $arr = json_decode($p, true);
+                    if (is_array($arr) && isset($arr[11]) && is_numeric($arr[11])) {
+                        $w = (int)round((float)$arr[11]); // PTotal
+                    }
+                } else {
+                    // CSV (Komma/Semikolon)
+                    $parts = preg_split('/[;,]/', $p);
+                    if (is_array($parts) && isset($parts[11]) && is_numeric($parts[11])) {
+                        $w = (int)round((float)$parts[11]); // PTotal
+                    }
+                }
+
                 if ($w !== null) {
                     $this->SetValueSafe('Leistung_W', $w);
                 }
@@ -134,11 +151,14 @@ class GoEMQTTMirror extends IPSModule
         }
     }
 
-    // ---- MQTT SUBSCRIBE (8.1 + abwärtskompatibel) ----
+    // ---- MQTT SUBSCRIBE (Symcon 8.1 + abwärtskompatibel) ----
     private function mqttSubscribe(string $topic, int $qos = 0): void
     {
         $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
-        if ($parent <= 0) { $this->LogMessage('MQTT SUB SKIP: kein Parent', KL_WARNING); return; }
+        if ($parent <= 0) {
+            $this->LogMessage('MQTT SUB SKIP: kein Parent', KL_WARNING);
+            return;
+        }
 
         $this->SendDataToParent(json_encode([
             'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}',
@@ -146,8 +166,8 @@ class GoEMQTTMirror extends IPSModule
             // 8.1 erwartet Root-Felder:
             'TopicFilter'       => $topic,
             'QualityOfService'  => $qos,
-            // für ältere Builds zusätzlich:
-            'Topics'            => [[
+            // zusätzlich für ältere Builds:
+            'Topics' => [[
                 'Topic'            => $topic,
                 'TopicFilter'      => $topic,
                 'QoS'              => $qos,
@@ -156,7 +176,7 @@ class GoEMQTTMirror extends IPSModule
         ]));
     }
 
-    // ---- MQTT PUBLISH (8.1 + abwärtskompatibel) ----
+    // ---- MQTT PUBLISH (Symcon 8.1 + abwärtskompatibel) ----
     private function mqttPublish(string $topic, string $payload, int $qos = 0, bool $retain = false): void
     {
         $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
@@ -167,38 +187,12 @@ class GoEMQTTMirror extends IPSModule
             'PacketType'        => 3, // PUBLISH
             'Topic'             => $topic,
             'Payload'           => $payload,
-            // 8.1 Pflichtfelder:
+            // Pflichtfelder in 8.1:
             'Retain'            => $retain,
             'QualityOfService'  => $qos,
-            // für ältere Builds zusätzlich:
+            // Abwärtskompatibel:
             'QoS'               => $qos
         ]));
-    }
-
-    // Holt PTotal (Index 11, 0-basiert) aus nrg → int Watt (ohne Skalierung)
-    private function nrgTotalW(string $payload): ?int
-    {
-        $p = trim($payload, "\" \t\n\r\0\x0B"); // evtl. Anführungszeichen entfernen
-        if ($p === '') {
-            return null;
-        }
-
-        // JSON-Array?
-        if ($p[0] === '[') {
-            $arr = json_decode($p, true);
-            if (is_array($arr) && array_key_exists(11, $arr) && is_numeric($arr[11])) {
-                return (int)round((float)$arr[11]);
-            }
-            return null;
-        }
-
-        // CSV (Komma/Semikolon)
-        $parts = preg_split('/[;,]/', $p);
-        if (is_array($parts) && array_key_exists(11, $parts) && is_numeric($parts[11])) {
-            return (int)round((float)$parts[11]);
-        }
-
-        return null;
     }
 
     /**
@@ -252,4 +246,3 @@ class GoEMQTTMirror extends IPSModule
         return 0;
     }
 }
-
