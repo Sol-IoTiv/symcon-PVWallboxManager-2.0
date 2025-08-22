@@ -157,44 +157,37 @@ class GoEMQTTMirror extends IPSModule
         }
     }
 
-    // SUBSCRIBE (Symcon 8.1; strikt & kompatibel)
-    private function mqttSubscribe(string $topic, int $qos = 0): void
+    class GoEMQTTMirror extends IPSModule
     {
-        $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
-        if ($parent <= 0) { $this->LogMessage('MQTT SUB SKIP: kein Parent', KL_WARNING); return; }
+        private const MQTT_TX = '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}';
+        private const MQTT_RX = '{7F7632D9-FA40-4F38-8DEA-C83CD4325A32}';
 
-        $this->SendDataToParent(json_encode([
-            'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}',
-            'PacketType'        => 8,                 // SUBSCRIBE
-            // 8.1-Pflichtfelder auf Root-Ebene:
-            'TopicFilter'       => $topic,
-            'QualityOfService'  => $qos,
-            // Abwärtskompatibel für ältere Builds:
-            'Topics'            => [[
+        // ... und dann:
+        private function mqttSubscribe(string $topic, int $qos = 0): void {
+            $this->SendDataToParent(json_encode([
+                'DataID'           => self::MQTT_TX,
+                'PacketType'       => 8,
                 'TopicFilter'      => $topic,
                 'QualityOfService' => $qos,
+                'Topics'           => [[
+                    'TopicFilter'      => $topic,
+                    'QualityOfService' => $qos,
+                    'QoS'               => $qos
+                ]]
+            ]));
+        }
+
+        private function mqttPublish(string $topic, string $payload, int $qos = 0, bool $retain = false): void {
+            $this->SendDataToParent(json_encode([
+                'DataID'           => self::MQTT_TX,
+                'PacketType'       => 3,
+                'Topic'            => $topic,
+                'Payload'          => $payload,
+                'Retain'           => $retain,
+                'QualityOfService' => $qos,
                 'QoS'              => $qos
-            ]]
-            // WICHTIG: KEIN 'Topic' und KEIN 'Retain' im Root setzen,
-            // damit der Frame garantiert nicht als PUBLISH fehlinterpretiert wird.
-        ]));
-    }
-
-    // PUBLISH (Symcon 8.1, kompatibel)
-    private function mqttPublish(string $topic, string $payload, int $qos = 0, bool $retain = false): void
-    {
-        $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
-        if ($parent <= 0) { $this->LogMessage('MQTT PUB SKIP: kein Parent', KL_WARNING); return; }
-
-        $this->SendDataToParent(json_encode([
-            'DataID'            => '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}',
-            'PacketType'        => 3,   // PUBLISH
-            'Topic'             => $topic,
-            'Payload'           => $payload,
-            'Retain'            => $retain,          // Pflicht in 8.1
-            'QualityOfService'  => $qos,             // Pflicht in 8.1
-            'QoS'               => $qos              // Abwärtskompatibel
-        ]));
+            ]));
+        }
     }
 
     // Kleiner Helfer für Topics
