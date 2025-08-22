@@ -1,0 +1,1 @@
+# symcon-PVWallboxMmanager-2.0
