@@ -204,24 +204,6 @@ class GoEMQTTMirror extends IPSModule
         return null;
     }
 
-        // CSV (Komma/Semikolon) → Summe numerischer Werte
-        $parts = preg_split('/[;,]/', $payload);
-        if (is_array($parts) && !empty($parts)) {
-            $sum = 0.0; $has = false;
-            foreach ($parts as $p) {
-                $p = trim($p);
-                if ($p === '') continue;
-                if (is_numeric($p)) {
-                    $sum += (float)$p;
-                    $has = true;
-                }
-            }
-            return $has ? $sum : null;
-        }
-
-        return null;
-    }
-
     /**
      * Findet genau EIN MQTT-Gateway (Server ODER Client) und hängt diese Instanz darunter.
      * Rückgabe: Parent-ID oder 0 (wenn keins/einschließlich Mehrfachtreffer).
