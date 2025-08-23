@@ -172,7 +172,7 @@ class GoEMQTTMirror extends IPSModule
         return rtrim($this->ReadPropertyString('BaseTopic'), '/') . '/' . $k;
     }
 
-    // SUBSCRIBE (Symcon 8.1; kompatibel)
+    // SUBSCRIBE (Symcon 8.1; maximal kompatibel)
     private function mqttSubscribe(string $topic, int $qos = 0): void
     {
         $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
@@ -181,14 +181,20 @@ class GoEMQTTMirror extends IPSModule
         $this->SendDataToParent(json_encode([
             'DataID'            => self::MQTT_TX,
             'PacketType'        => 8,                 // SUBSCRIBE
-            // 8.1-Pflichtfelder:
-            'TopicFilter'       => $topic,
-            'QualityOfService'  => $qos,
-            // Abwärtskompatibel für ältere Builds:
+
+            // Root-Felder: alle gängigen Varianten mitgeben
+            'Topic'             => $topic,            // manche Builds erwarten "Topic"
+            'TopicFilter'       => $topic,            // offizielle 8.1-Variante
+            'QoS'               => $qos,              // abwärtskompatibel
+            'QualityOfService'  => $qos,              // 8.1 Pflicht
+            'Retain'            => false,             // einige Validatoren prüfen generisch darauf
+
+            // Legacy/Kompatibilitätsblock
             'Topics'            => [[
+                'Topic'            => $topic,
                 'TopicFilter'      => $topic,
-                'QualityOfService' => $qos,
-                'QoS'              => $qos
+                'QoS'              => $qos,
+                'QualityOfService' => $qos
             ]]
         ]));
     }
