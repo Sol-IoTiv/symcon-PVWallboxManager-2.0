@@ -20,10 +20,17 @@ class GoEMQTTMirror extends IPSModule
         // Kern-Variablen
         $this->RegisterVariableInteger('Ampere_A',          'Ampere [A]',               '',       10);
         $this->RegisterVariableInteger('Leistung_W',        'Leistung [W]',             '~Watt',  20);
+        $this->RegisterVariableInteger('CarState',          'Fahrzeugstatus',           'GoE.CarState', 25);
         $this->RegisterVariableBoolean('FahrzeugVerbunden', 'Fahrzeug verbunden',       '~Switch',30);
-        $this->RegisterVariableInteger('ALW',               'ALW (0/1)',                '',       40);
-        $this->RegisterVariableInteger('FRC',               'FRC (0/1/2)',              '',       50);
-        $this->RegisterVariableInteger('Phasenmodus',       'Phasenmodus (1/2)',        '',       60);
+//        $this->RegisterVariableInteger('ALW',               'ALW (0/1)',                '',       40);
+        $this->RegisterVariableBoolean('ALW',               'Allow Charging (ALW)',     '~Switch', 40);
+
+//        $this->RegisterVariableInteger('FRC',               'FRC (0/1/2)',              '',       50);
+        $this->RegisterVariableInteger('FRC',               'Force State (FRC)',        'GoE.ForceState', 50);
+
+//        $this->RegisterVariableInteger('Phasenmodus',       'Phasenmodus (1/2)',        '',       60);
+        $this->RegisterVariableInteger('Phasenmodus',       'Phasenmodus',              'GoE.PhaseMode', 60);
+
         $this->RegisterVariableString('LastSeenUTC',        'Zuletzt gesehen (UTC)',    '',       70);
 
         // Debug
@@ -36,6 +43,8 @@ class GoEMQTTMirror extends IPSModule
     public function ApplyChanges()
     {
         parent::ApplyChanges();
+
+        $this->ensureProfiles();
 
         $base = rtrim((string)$this->ReadPropertyString('BaseTopic'), '/');
         if ($base === '') {
@@ -99,20 +108,41 @@ class GoEMQTTMirror extends IPSModule
                 break;
 
             case 'alw':
-                $this->SetValueSafe('ALW', (int)$payload);
+            {
+                // v2: read-only Anzeige (true/false)
+                $this->SetValueSafe('ALW', ((int)$payload) === 1);
                 break;
+            }
 
             case 'frc':
+            {
+                // 0=Neutral, 1=Force-Off, 2=Force-On
                 $this->SetValueSafe('FRC', (int)$payload);
                 break;
+}
 
             case 'car':
-                $this->SetValueSafe('FahrzeugVerbunden', ((int)$payload) !== 0);
+            {
+                // CarState ablegen + "verbunden" ableiten
+                $state = is_numeric($payload) ? (int)$payload : 0;
+                $this->SetValueSafe('CarState', $state);
+
+                // "verbunden" = Idle/Charging/WaitCar/Complete
+                $connected = in_array($state, [1,2,3,4], true);
+                $this->SetValueSafe('FahrzeugVerbunden', $connected);
                 break;
+            }
 
             case 'psm':
-                $this->SetValueSafe('Phasenmodus', ((int)$payload === 2) ? 2 : 1);
+            {
+                // 1/2 durchreichen, sonst Payload robust casten
+                $pm = (int)$payload;
+                if ($pm !== 1 && $pm !== 2) {
+                    // falls exotisch, einfach setzen – Profil zeigt Zahl
+                }
+                $this->SetValueSafe('Phasenmodus', $pm);
                 break;
+            }
 
             case 'utc':
                 $this->SetValueSafe('LastSeenUTC', trim($payload, "\" \t\n\r\0\x0B"));
@@ -254,4 +284,34 @@ class GoEMQTTMirror extends IPSModule
         }
         return 0;
     }
+
+    private function ensureProfiles(): void
+    {
+        if (!IPS_VariableProfileExists('GoE.CarState')) {
+            IPS_CreateVariableProfile('GoE.CarState', VARIABLETYPE_INTEGER);
+            IPS_SetVariableProfileText('GoE.CarState', '', '');
+            IPS_SetVariableProfileIcon('GoE.CarState', 'Car');
+            // value, label, icon, color
+            IPS_SetVariableProfileAssociation('GoE.CarState', 0, 'Unbekannt/Firmwarefehler', '', -1);
+            IPS_SetVariableProfileAssociation('GoE.CarState', 1, 'Bereit, kein Fahrzeug', '', -1);
+            IPS_SetVariableProfileAssociation('GoE.CarState', 2, 'Fahrzeug lädt', '', -1);
+            IPS_SetVariableProfileAssociation('GoE.CarState', 3, 'Fahrzeug verbunden / Bereit zum Laden', '', -1);
+            IPS_SetVariableProfileAssociation('GoE.CarState', 4, 'Ladung beendet, Fahrzeug noch verbunden', '', -1);
+            IPS_SetVariableProfileAssociation('GoE.CarState', 5, 'Fehler', '', -1);
+        }
+
+        if (!IPS_VariableProfileExists('GoE.ForceState')) {
+            IPS_CreateVariableProfile('GoE.ForceState', VARIABLETYPE_INTEGER);
+            IPS_SetVariableProfileAssociation('GoE.ForceState', 0, 'Neutral (Wallbox entscheidet)', '', -1);
+            IPS_SetVariableProfileAssociation('GoE.ForceState', 1, 'Nicht Laden (gesperrt)', '', -1);
+            IPS_SetVariableProfileAssociation('GoE.ForceState', 2, 'Laden (erzwungen)', '', -1);
+        }
+
+        if (!IPS_VariableProfileExists('GoE.PhaseMode')) {
+            IPS_CreateVariableProfile('GoE.PhaseMode', VARIABLETYPE_INTEGER);
+            IPS_SetVariableProfileAssociation('GoE.PhaseMode', 1, '1-phasig', '', -1);
+            IPS_SetVariableProfileAssociation('GoE.PhaseMode', 2, '3-phasig', '', -1);
+        }
+    }
+
 }
