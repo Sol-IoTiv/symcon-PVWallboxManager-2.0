@@ -22,6 +22,8 @@ class GoEMQTTMirror extends IPSModule
         // Kern-Variablen
         $this->RegisterVariableInteger('Ampere_A',          'Ampere [A]',               'GoE.Ampere', 10);
         $this->EnableAction('Ampere_A');
+        $this->RegisterVariableInteger('AmpereSoll_A', 'Ampere Soll', 'GoE.Amp', 15);
+        $this->EnableAction('AmpereSoll_A');
         $this->RegisterVariableInteger('Leistung_W',        'Leistung [W]',             '~Watt',  20);
         $this->RegisterVariableInteger('CarState',          'Fahrzeugstatus',           'GoE.CarState', 25);
         $this->RegisterVariableBoolean('FahrzeugVerbunden', 'Fahrzeug verbunden',       '~Switch',30);
@@ -316,12 +318,10 @@ private function mqttSubscribe(string $topic, int $qos = 0): void
             IPS_SetVariableProfileAssociation('GoE.CarState', 4, 'Ladung beendet, Fahrzeug noch verbunden', '', -1);
             IPS_SetVariableProfileAssociation('GoE.CarState', 5, 'Fehler', '', -1);
         }
-
-        if (!IPS_VariableProfileExists('GoE.AmpLimit')) {
-            IPS_CreateVariableProfile('GoE.AmpLimit', VARIABLETYPE_INTEGER);
-            IPS_SetVariableProfileValues('GoE.AmpLimit', 6, 16, 2);
-            IPS_SetVariableProfileText('GoE.AmpLimit', '', ' A');
-            IPS_SetVariableProfileIcon('GoE.AmpLimit', 'Electricity');
+        if (!IPS_VariableProfileExists('GoE.Amp')) {
+            IPS_CreateVariableProfile('GoE.Amp', VARIABLETYPE_INTEGER);
+            IPS_SetVariableProfileValues('GoE.Amp', 6, 16, 2); // min,max,step – an deine Installation anpassen
+            IPS_SetVariableProfileText('GoE.Amp', '', ' A');
         }
         if (!IPS_VariableProfileExists('GoE.PhaseMode')) {
             IPS_CreateVariableProfile('GoE.PhaseMode', VARIABLETYPE_INTEGER);
@@ -346,25 +346,23 @@ private function mqttSubscribe(string $topic, int $qos = 0): void
     public function RequestAction($Ident, $Value)
     {
         switch ($Ident) {
-            case 'Ampere_A':
-                // dynamisches Ampere-Limit → ama/set (Fallback amp/set)
-                $this->sendSet('ama', (int)$Value);
+            case 'AmpereSoll_A':
+                $amp = max(6, min(32, (int)$Value));               // ggf. Grenzen anpassen
+                $this->mqttPublish($this->bt('ama').'/set', (string)$amp, 0, false);
                 break;
 
-            case 'Phasenmodus':
+            case 'Phasenmodus':                                   // 1 oder 2
                 $pm = ((int)$Value === 2) ? 2 : 1;
-                $this->sendSet('psm', $pm);
+                $this->mqttPublish($this->bt('psm').'/set', (string)$pm, 0, false);
                 break;
 
-            case 'FRC':
-                $fs = in_array((int)$Value, [0,1,2], true) ? (int)$Value : 0;
-                $this->sendSet('frc', $fs);
+            case 'FRC':                                           // 0=neutral,1=aus,2=an
+                $frc = in_array((int)$Value, [0,1,2], true) ? (int)$Value : 0;
+                $this->mqttPublish($this->bt('frc').'/set', (string)$frc, 0, false);
                 break;
 
-            case 'ALW':
-                // v2: per MQTT nicht schreibbar → ignorieren
-                $this->LogMessage('ALW ist über MQTT (v2) read-only. Bitte FRC verwenden.', KL_WARNING);
-                break;
+            default:
+                throw new Exception('Unbekannte Aktion: '.$Ident);
         }
     }
 
