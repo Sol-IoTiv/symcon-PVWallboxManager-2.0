@@ -20,10 +20,12 @@ class GoEMQTTMirror extends IPSModule
         $this->RegisterPropertyString('BaseTopic', 'go-eCharger/285450');
 
         // Kern-Variablen
-        $this->RegisterVariableInteger('Ampere_A',          'Ampere [A]',               'GoE.Ampere', 10);
+        $this->RegisterVariableInteger('Ampere_A',          'Ampere [A]',               'GoE.Amp', 10);
         $this->EnableAction('Ampere_A');
-        $this->RegisterVariableInteger('AmpereSoll_A', 'Ampere Soll', 'GoE.Amp', 15);
-        $this->EnableAction('AmpereSoll_A');
+//        $this->RegisterVariableInteger('Ampere_A',          'Ampere [A]',               'GoE.Ampere', 10);
+//        $this->EnableAction('Ampere_A');
+//        $this->RegisterVariableInteger('AmpereSoll_A', 'Ampere Soll', 'GoE.Amp', 15);
+//        $this->EnableAction('AmpereSoll_A');
         $this->RegisterVariableInteger('Leistung_W',        'Leistung [W]',             '~Watt',  20);
         $this->RegisterVariableInteger('CarState',          'Fahrzeugstatus',           'GoE.CarState', 25);
         $this->RegisterVariableBoolean('FahrzeugVerbunden', 'Fahrzeug verbunden',       '~Switch',30);
@@ -320,7 +322,7 @@ private function mqttSubscribe(string $topic, int $qos = 0): void
         }
         if (!IPS_VariableProfileExists('GoE.Amp')) {
             IPS_CreateVariableProfile('GoE.Amp', VARIABLETYPE_INTEGER);
-            IPS_SetVariableProfileValues('GoE.Amp', 6, 16, 2); // min,max,step – an deine Installation anpassen
+            IPS_SetVariableProfileValues('GoE.Amp', 6, 16, 1); // z.B. 6..16 A in 1A-Schritten
             IPS_SetVariableProfileText('GoE.Amp', '', ' A');
         }
         if (!IPS_VariableProfileExists('GoE.PhaseMode')) {
@@ -346,20 +348,29 @@ private function mqttSubscribe(string $topic, int $qos = 0): void
     public function RequestAction($Ident, $Value)
     {
         switch ($Ident) {
-            case 'AmpereSoll_A':
-                $amp = max(6, min(32, (int)$Value));               // ggf. Grenzen anpassen
+            case 'Ampere_A': {
+                // clamp passend zu deinem Profil
+                $amp = max(self::MIN_AMP, min(self::MAX_AMP, (int)$Value));
+                // MQTT: dynamisches Stromlimit → ama/set
                 $this->mqttPublish($this->bt('ama').'/set', (string)$amp, 0, false);
+                // lokales Feedback
+                $this->SetValueSafe('Ampere_A', $amp);
                 break;
+            }
 
-            case 'Phasenmodus':                                   // 1 oder 2
+            case 'Phasenmodus': {
                 $pm = ((int)$Value === 2) ? 2 : 1;
                 $this->mqttPublish($this->bt('psm').'/set', (string)$pm, 0, false);
+                $this->SetValueSafe('Phasenmodus', $pm);
                 break;
+            }
 
-            case 'FRC':                                           // 0=neutral,1=aus,2=an
+            case 'FRC': {
                 $frc = in_array((int)$Value, [0,1,2], true) ? (int)$Value : 0;
                 $this->mqttPublish($this->bt('frc').'/set', (string)$frc, 0, false);
+                $this->SetValueSafe('FRC', $frc);
                 break;
+            }
 
             default:
                 throw new Exception('Unbekannte Aktion: '.$Ident);
