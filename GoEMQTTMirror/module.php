@@ -20,7 +20,7 @@ class GoEMQTTMirror extends IPSModule
         $this->RegisterPropertyString('BaseTopic', 'go-eCharger/285450');
 
         // Kern-Variablen
-        $this->RegisterVariableInteger('Ampere_A',          'Ampere [A]',               '',       10);
+        $this->RegisterVariableInteger('Ampere_A',          'Stromlimit',               'GoE.Ampere', 10);
         $this->EnableAction('Ampere_A');
         $this->RegisterVariableInteger('Leistung_W',        'Leistung [W]',             '~Watt',  20);
         $this->RegisterVariableInteger('CarState',          'Fahrzeugstatus',           'GoE.CarState', 25);
@@ -328,6 +328,13 @@ private function mqttSubscribe(string $topic, int $qos = 0): void
             IPS_SetVariableProfileAssociation('GoE.PhaseMode', 1, '1-phasig', '', -1);
             IPS_SetVariableProfileAssociation('GoE.PhaseMode', 2, '3-phasig', '', -1);
         }
+
+        if (!IPS_VariableProfileExists('GoE.Ampere')) {
+            IPS_CreateVariableProfile('GoE.Ampere', VARIABLETYPE_INTEGER);
+            IPS_SetVariableProfileText('GoE.Ampere', '', ' A');      // Suffix
+            IPS_SetVariableProfileIcon('GoE.Ampere', 'Electricity'); // optional
+            IPS_SetVariableProfileValues('GoE.Ampere', 6, 16, 2);    // Min, Max, Step -> Slider
+        }
     }
 
     // Grenzen für go-e (typisch): 6..32 A
@@ -342,16 +349,9 @@ private function mqttSubscribe(string $topic, int $qos = 0): void
         switch ($Ident) {
 
             case 'Ampere_A':
-                // clamp 6..32
-                $amp = (int)$Value;
-                if ($amp < self::MIN_AMP) $amp = self::MIN_AMP;
-                if ($amp > self::MAX_AMP) $amp = self::MAX_AMP;
-
-                // publish → go-e erwartet Integer-Ampere auf <base>/amp
-                $this->mqttPublish($this->bt('amp'), (string)$amp, 0, false);
-
-                // Lokal sofort spiegeln (UI-Feedback), reale Rückmeldung kommt über MQTT anyway
-                $this->SetValueSafe('Ampere_A', $amp);
+                $amp = max(6, min(16, (int)$Value));                // clamp 6..32
+                $this->mqttPublish($this->bt('amp'), (string)$amp); // an go-e senden
+                $this->SetValueSafe('Ampere_A', $amp);              // lokales Feedback
                 break;
 
             case 'Phasenmodus':
