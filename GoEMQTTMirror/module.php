@@ -21,6 +21,7 @@ class GoEMQTTMirror extends IPSModule
 
         // Kern-Variablen
         $this->RegisterVariableInteger('Ampere_A',          'Ampere [A]',               '',       10);
+        $this->EnableAction('Ampere_A');
         $this->RegisterVariableInteger('Leistung_W',        'Leistung [W]',             '~Watt',  20);
         $this->RegisterVariableInteger('CarState',          'Fahrzeugstatus',           'GoE.CarState', 25);
         $this->RegisterVariableBoolean('FahrzeugVerbunden', 'Fahrzeug verbunden',       '~Switch',30);
@@ -32,6 +33,7 @@ class GoEMQTTMirror extends IPSModule
 
 //        $this->RegisterVariableInteger('Phasenmodus',       'Phasenmodus (1/2)',        '',       60);
         $this->RegisterVariableInteger('Phasenmodus',       'Phasenmodus',              'GoE.PhaseMode', 60);
+        $this->EnableAction('Phasenmodus');
 
         $this->RegisterVariableString('LastSeenUTC',        'Zuletzt gesehen (UTC)',    '',       70);
 
@@ -327,5 +329,51 @@ private function mqttSubscribe(string $topic, int $qos = 0): void
             IPS_SetVariableProfileAssociation('GoE.PhaseMode', 2, '3-phasig', '', -1);
         }
     }
+
+    // Grenzen für go-e (typisch): 6..32 A
+    private const MIN_AMP = 6;
+    private const MAX_AMP = 16;
+
+    /**
+     * Symcon-Action-Handler für schreibbare Variablen
+     */
+    public function RequestAction($Ident, $Value)
+    {
+        switch ($Ident) {
+
+            case 'Ampere_A':
+                // clamp 6..32
+                $amp = (int)$Value;
+                if ($amp < self::MIN_AMP) $amp = self::MIN_AMP;
+                if ($amp > self::MAX_AMP) $amp = self::MAX_AMP;
+
+                // publish → go-e erwartet Integer-Ampere auf <base>/amp
+                $this->mqttPublish($this->bt('amp'), (string)$amp, 0, false);
+
+                // Lokal sofort spiegeln (UI-Feedback), reale Rückmeldung kommt über MQTT anyway
+                $this->SetValueSafe('Ampere_A', $amp);
+                break;
+
+            case 'Phasenmodus':
+                // 1 = 1-phasig, 2 = 3-phasig
+                $pm = (int)$Value;
+                if ($pm !== 1 && $pm !== 2) {
+                    // ungültig → auf 1 phasig zurück
+                    $pm = 1;
+                }
+
+                // publish → <base>/psm
+                $this->mqttPublish($this->bt('psm'), (string)$pm, 0, false);
+
+                $this->SetValueSafe('Phasenmodus', $pm);
+                break;
+
+            default:
+                // Unbekannt: nichts tun
+                $this->LogMessage('RequestAction unbekannt: '.$Ident, KL_WARNING);
+                return;
+        }
+}
+
 
 }
