@@ -14,6 +14,8 @@ class GoEMQTTMirror extends IPSModule
     {
         parent::Create();
 
+        $this->ensureProfiles();
+
         // Dein go-e Basis-Topic hier anpassen
         $this->RegisterPropertyString('BaseTopic', 'go-eCharger/285450');
 
