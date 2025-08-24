@@ -22,23 +22,16 @@ class GoEMQTTMirror extends IPSModule
         // Kern-Variablen
         $this->RegisterVariableInteger('Ampere_A',          'Ampere [A]',               'GoE.Amp', 10);
         $this->EnableAction('Ampere_A');
-//        $this->RegisterVariableInteger('Ampere_A',          'Ampere [A]',               'GoE.Ampere', 10);
-//        $this->EnableAction('Ampere_A');
-//        $this->RegisterVariableInteger('AmpereSoll_A', 'Ampere Soll', 'GoE.Amp', 15);
-//        $this->EnableAction('AmpereSoll_A');
         $this->RegisterVariableInteger('Leistung_W',        'Leistung [W]',             '~Watt',  20);
         $this->RegisterVariableInteger('CarState',          'Fahrzeugstatus',           'GoE.CarState', 25);
         $this->RegisterVariableBoolean('FahrzeugVerbunden', 'Fahrzeug verbunden',       '~Switch',30);
-//        $this->RegisterVariableInteger('ALW',               'ALW (0/1)',                '',       40);
         $this->RegisterVariableBoolean('ALW',               'Allow Charging (ALW)',     '~Switch', 40);
-
-//        $this->RegisterVariableInteger('FRC',               'FRC (0/1/2)',              '',       50);
+        $this->RegisterVariableBoolean('Laden',             'Laden',                    '~Switch', 45);
+        $this->EnableAction('Laden');
         $this->RegisterVariableInteger('FRC',               'Force State (FRC)',        'GoE.ForceState', 50);
-
-//        $this->RegisterVariableInteger('Phasenmodus',       'Phasenmodus (1/2)',        '',       60);
+        $this->EnableAction('FRC');
         $this->RegisterVariableInteger('Phasenmodus',       'Phasenmodus',              'GoE.PhaseMode', 60);
         $this->EnableAction('Phasenmodus');
-
         $this->RegisterVariableString('LastSeenUTC',        'Zuletzt gesehen (UTC)',    '',       70);
 
         // Debug
@@ -125,10 +118,11 @@ class GoEMQTTMirror extends IPSModule
 
             case 'frc':
             {
-                // 0=Neutral, 1=Force-Off, 2=Force-On
-                $this->SetValueSafe('FRC', (int)$payload);
+                $v = (int)$payload;                    // 0/1/2
+                $this->SetValueSafe('FRC', $v);
+                $this->SetValueSafe('Laden', $v === 2); // Switch zeigt Start/Stop
                 break;
-}
+            }
 
             case 'car':
             {
@@ -211,44 +205,43 @@ class GoEMQTTMirror extends IPSModule
         return rtrim($this->ReadPropertyString('BaseTopic'), '/') . '/' . $k;
     }
 
-// SUBSCRIBE (Symcon 8.1; maximal kompatibel & gateway-freundlich)
-private function mqttSubscribe(string $topic, int $qos = 0): void
-{
-    $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
-    if ($parent <= 0) {
-        $this->LogMessage('MQTT SUB SKIP: kein Parent', KL_WARNING);
-        return;
+    // SUBSCRIBE (Symcon 8.1; maximal kompatibel & gateway-freundlich)
+    private function mqttSubscribe(string $topic, int $qos = 0): void
+    {
+        $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
+        if ($parent <= 0) {
+            $this->LogMessage('MQTT SUB SKIP: kein Parent', KL_WARNING);
+            return;
+        }
+
+        // Einheitlicher Frame: generische Felder + Subscribe-spezifische Felder
+        $frame = [
+            'DataID'            => self::MQTT_TX,
+            'PacketType'        => 8,          // SUBSCRIBE
+
+            // Generisch (manche Builds/Validatoren verlangen das immer)
+            'QualityOfService'  => $qos,
+            'Retain'            => false,
+            'Topic'             => $topic,
+            'Payload'           => '',         // leer, um "Payload fehlt" zu vermeiden
+
+            // SUBSCRIBE-spezifisch (8.1)
+            'TopicFilter'       => $topic,
+
+            // Legacy/Abwärtskompatibilität
+            'Topics'            => [[
+                'Topic'            => $topic,
+                'TopicFilter'      => $topic,
+                'QoS'              => $qos,
+                'QualityOfService' => $qos
+            ]]
+        ];
+
+        // Optional zum Debuggen:
+        $this->LogMessage('SUB frame: '.json_encode($frame), KL_MESSAGE);
+
+        $this->SendDataToParent(json_encode($frame));
     }
-
-    // Einheitlicher Frame: generische Felder + Subscribe-spezifische Felder
-    $frame = [
-        'DataID'            => self::MQTT_TX,
-        'PacketType'        => 8,          // SUBSCRIBE
-
-        // Generisch (manche Builds/Validatoren verlangen das immer)
-        'QualityOfService'  => $qos,
-        'Retain'            => false,
-        'Topic'             => $topic,
-        'Payload'           => '',         // leer, um "Payload fehlt" zu vermeiden
-
-        // SUBSCRIBE-spezifisch (8.1)
-        'TopicFilter'       => $topic,
-
-        // Legacy/Abwärtskompatibilität
-        'Topics'            => [[
-            'Topic'            => $topic,
-            'TopicFilter'      => $topic,
-            'QoS'              => $qos,
-            'QualityOfService' => $qos
-        ]]
-    ];
-
-    // Optional zum Debuggen:
-    $this->LogMessage('SUB frame: '.json_encode($frame), KL_MESSAGE);
-
-    $this->SendDataToParent(json_encode($frame));
-}
-
 
     // PUBLISH (Symcon 8.1; kompatibel)
     private function mqttPublish(string $topic, string $payload, int $qos = 0, bool $retain = false): void
@@ -365,16 +358,24 @@ private function mqttSubscribe(string $topic, int $qos = 0): void
                 break;
             }
 
-            case 'FRC': {
-                $frc = in_array((int)$Value, [0,1,2], true) ? (int)$Value : 0;
+            case 'Laden': {
+                // true -> Start (2), false -> Stop (1)
+                $frc = $Value ? 2 : 1;
                 $this->mqttPublish($this->bt('frc').'/set', (string)$frc, 0, false);
+                // lokales Feedback
                 $this->SetValueSafe('FRC', $frc);
+                $this->SetValueSafe('Laden', (bool)$Value);
                 break;
             }
 
-            default:
-                throw new Exception('Unbekannte Aktion: '.$Ident);
-        }
+            case 'FRC': {
+                // Direkte Steuerung über das Integer-Profil (0/1/2)
+                $frc = in_array((int)$Value, [0,1,2], true) ? (int)$Value : 0;
+                $this->mqttPublish($this->bt('frc').'/set', (string)$frc, 0, false);
+                $this->SetValueSafe('FRC', $frc);
+                $this->SetValueSafe('Laden', $frc === 2);
+                break;
+            }
     }
 
     private function sendSet(string $key, $value): void
