@@ -376,6 +376,7 @@ class GoEMQTTMirror extends IPSModule
                 $this->SetValueSafe('Laden', $frc === 2);
                 break;
             }
+        }
     }
 
     private function sendSet(string $key, $value): void
