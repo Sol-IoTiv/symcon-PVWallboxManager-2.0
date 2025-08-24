@@ -20,7 +20,7 @@ class GoEMQTTMirror extends IPSModule
         $this->RegisterPropertyString('BaseTopic', 'go-eCharger/285450');
 
         // Kern-Variablen
-        $this->RegisterVariableInteger('Ampere_A',          'Stromlimit',               'GoE.Ampere', 10);
+        $this->RegisterVariableInteger('Ampere_A',          'Ampere [A]',               'GoE.Ampere', 10);
         $this->EnableAction('Ampere_A');
         $this->RegisterVariableInteger('Leistung_W',        'Leistung [W]',             '~Watt',  20);
         $this->RegisterVariableInteger('CarState',          'Fahrzeugstatus',           'GoE.CarState', 25);
@@ -107,6 +107,7 @@ class GoEMQTTMirror extends IPSModule
         $key = substr($topic, strlen($baseWithSlash)); // z.B. "nrg","car","amp","alw","psm","utc"
 
         switch ($key) {
+            case 'ama':
             case 'amp':
                 $this->SetValueSafe('Ampere_A', (int)$payload);
                 break;
@@ -316,24 +317,22 @@ private function mqttSubscribe(string $topic, int $qos = 0): void
             IPS_SetVariableProfileAssociation('GoE.CarState', 5, 'Fehler', '', -1);
         }
 
-        if (!IPS_VariableProfileExists('GoE.ForceState')) {
-            IPS_CreateVariableProfile('GoE.ForceState', VARIABLETYPE_INTEGER);
-            IPS_SetVariableProfileAssociation('GoE.ForceState', 0, 'Neutral (Wallbox entscheidet)', '', -1);
-            IPS_SetVariableProfileAssociation('GoE.ForceState', 1, 'Nicht Laden (gesperrt)', '', -1);
-            IPS_SetVariableProfileAssociation('GoE.ForceState', 2, 'Laden (erzwungen)', '', -1);
+        if (!IPS_VariableProfileExists('GoE.AmpLimit')) {
+            IPS_CreateVariableProfile('GoE.AmpLimit', VARIABLETYPE_INTEGER);
+            IPS_SetVariableProfileValues('GoE.AmpLimit', 6, 16, 2);
+            IPS_SetVariableProfileText('GoE.AmpLimit', '', ' A');
+            IPS_SetVariableProfileIcon('GoE.AmpLimit', 'Electricity');
         }
-
         if (!IPS_VariableProfileExists('GoE.PhaseMode')) {
             IPS_CreateVariableProfile('GoE.PhaseMode', VARIABLETYPE_INTEGER);
             IPS_SetVariableProfileAssociation('GoE.PhaseMode', 1, '1-phasig', '', -1);
             IPS_SetVariableProfileAssociation('GoE.PhaseMode', 2, '3-phasig', '', -1);
         }
-
-        if (!IPS_VariableProfileExists('GoE.Ampere')) {
-            IPS_CreateVariableProfile('GoE.Ampere', VARIABLETYPE_INTEGER);
-            IPS_SetVariableProfileText('GoE.Ampere', '', ' A');      // Suffix
-            IPS_SetVariableProfileIcon('GoE.Ampere', 'Electricity'); // optional
-            IPS_SetVariableProfileValues('GoE.Ampere', 6, 16, 2);    // Min, Max, Step -> Slider
+        if (!IPS_VariableProfileExists('GoE.ForceState')) {
+            IPS_CreateVariableProfile('GoE.ForceState', VARIABLETYPE_INTEGER);
+            IPS_SetVariableProfileAssociation('GoE.ForceState', 0, 'Neutral', '', -1);
+            IPS_SetVariableProfileAssociation('GoE.ForceState', 1, 'Stop (Force-Off)', '', -1);
+            IPS_SetVariableProfileAssociation('GoE.ForceState', 2, 'Start (Force-On)', '', -1);
         }
     }
 
@@ -347,33 +346,31 @@ private function mqttSubscribe(string $topic, int $qos = 0): void
     public function RequestAction($Ident, $Value)
     {
         switch ($Ident) {
-
             case 'Ampere_A':
-                $amp = max(6, min(16, (int)$Value));                // clamp 6..32
-                $this->mqttPublish($this->bt('amp'), (string)$amp); // an go-e senden
-                $this->SetValueSafe('Ampere_A', $amp);              // lokales Feedback
+                // dynamisches Ampere-Limit → ama/set (Fallback amp/set)
+                $this->sendSet('ama', (int)$Value);
                 break;
 
             case 'Phasenmodus':
-                // 1 = 1-phasig, 2 = 3-phasig
-                $pm = (int)$Value;
-                if ($pm !== 1 && $pm !== 2) {
-                    // ungültig → auf 1 phasig zurück
-                    $pm = 1;
-                }
-
-                // publish → <base>/psm
-                $this->mqttPublish($this->bt('psm'), (string)$pm, 0, false);
-
-                $this->SetValueSafe('Phasenmodus', $pm);
+                $pm = ((int)$Value === 2) ? 2 : 1;
+                $this->sendSet('psm', $pm);
                 break;
 
-            default:
-                // Unbekannt: nichts tun
-                $this->LogMessage('RequestAction unbekannt: '.$Ident, KL_WARNING);
-                return;
+            case 'FRC':
+                $fs = in_array((int)$Value, [0,1,2], true) ? (int)$Value : 0;
+                $this->sendSet('frc', $fs);
+                break;
+
+            case 'ALW':
+                // v2: per MQTT nicht schreibbar → ignorieren
+                $this->LogMessage('ALW ist über MQTT (v2) read-only. Bitte FRC verwenden.', KL_WARNING);
+                break;
         }
-}
+    }
 
-
+    private function sendSet(string $key, $value): void
+    {
+        $topic = rtrim($this->ReadPropertyString('BaseTopic'), '/') . '/' . $key . '/set';
+        $this->mqttPublish($topic, (string)$value, 0, false);
+    }
 }
