@@ -204,23 +204,44 @@ class GoEMQTTMirror extends IPSModule
         return rtrim($this->ReadPropertyString('BaseTopic'), '/') . '/' . $k;
     }
 
-    // SUBSCRIBE (Symcon 8.1; strikt)
-    private function mqttSubscribe(string $topic, int $qos = 0): void
-    {
-        $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
-        if ($parent <= 0) {
-            $this->LogMessage('MQTT SUB SKIP: kein Parent', KL_WARNING);
-            return;
-        }
-
-        $this->SendDataToParent(json_encode([
-            'DataID'           => self::MQTT_TX,
-            'PacketType'       => 8,               // SUBSCRIBE
-            'TopicFilter'      => $topic,          // Pflicht
-            'QualityOfService' => $qos             // Pflicht
-            // KEIN 'Topic', KEIN 'Retain', KEIN 'Payload' hier!
-        ]));
+// SUBSCRIBE (Symcon 8.1; maximal kompatibel & gateway-freundlich)
+private function mqttSubscribe(string $topic, int $qos = 0): void
+{
+    $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
+    if ($parent <= 0) {
+        $this->LogMessage('MQTT SUB SKIP: kein Parent', KL_WARNING);
+        return;
     }
+
+    // Einheitlicher Frame: generische Felder + Subscribe-spezifische Felder
+    $frame = [
+        'DataID'            => self::MQTT_TX,
+        'PacketType'        => 8,          // SUBSCRIBE
+
+        // Generisch (manche Builds/Validatoren verlangen das immer)
+        'QualityOfService'  => $qos,
+        'Retain'            => false,
+        'Topic'             => $topic,
+        'Payload'           => '',         // leer, um "Payload fehlt" zu vermeiden
+
+        // SUBSCRIBE-spezifisch (8.1)
+        'TopicFilter'       => $topic,
+
+        // Legacy/Abwärtskompatibilität
+        'Topics'            => [[
+            'Topic'            => $topic,
+            'TopicFilter'      => $topic,
+            'QoS'              => $qos,
+            'QualityOfService' => $qos
+        ]]
+    ];
+
+    // Optional zum Debuggen:
+    $this->LogMessage('SUB frame: '.json_encode($frame), KL_MESSAGE);
+
+    $this->SendDataToParent(json_encode($frame));
+}
+
 
     // PUBLISH (Symcon 8.1; kompatibel)
     private function mqttPublish(string $topic, string $payload, int $qos = 0, bool $retain = false): void
