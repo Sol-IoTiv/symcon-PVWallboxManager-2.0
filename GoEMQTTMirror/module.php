@@ -26,8 +26,8 @@ class GoEMQTTMirror extends IPSModule
         $this->RegisterVariableInteger('CarState',          'Fahrzeugstatus',           'GoE.CarState', 25);
         $this->RegisterVariableBoolean('FahrzeugVerbunden', 'Fahrzeug verbunden',       '~Switch',30);
         $this->RegisterVariableBoolean('ALW',               'Allow Charging (ALW)',     '~Switch', 40);
-        $this->RegisterVariableBoolean('Laden',             'Laden',                    '~Switch', 45);
-        $this->EnableAction('Laden');
+//        $this->RegisterVariableBoolean('Laden',             'Laden',                    '~Switch', 45);
+//        $this->EnableAction('Laden');
         $this->RegisterVariableInteger('FRC',               'Force State (FRC)',        'GoE.ForceState', 50);
         $this->EnableAction('FRC');
         $this->RegisterVariableInteger('Phasenmodus',       'Phasenmodus',              'GoE.PhaseMode', 60);
@@ -44,8 +44,6 @@ class GoEMQTTMirror extends IPSModule
     public function ApplyChanges()
     {
         parent::ApplyChanges();
-
-        $this->ensureProfiles();
 
         $base = rtrim((string)$this->ReadPropertyString('BaseTopic'), '/');
         if ($base === '') {
@@ -120,7 +118,7 @@ class GoEMQTTMirror extends IPSModule
             {
                 $v = (int)$payload;                    // 0/1/2
                 $this->SetValueSafe('FRC', $v);
-                $this->SetValueSafe('Laden', $v === 2); // Switch zeigt Start/Stop
+//                $this->SetValueSafe('Laden', $v === 2); // Switch zeigt Start/Stop
                 break;
             }
 
@@ -238,7 +236,7 @@ class GoEMQTTMirror extends IPSModule
         ];
 
         // Optional zum Debuggen:
-        $this->LogMessage('SUB frame: '.json_encode($frame), KL_MESSAGE);
+        //$this->LogMessage('SUB frame: '.json_encode($frame), KL_MESSAGE);
 
         $this->SendDataToParent(json_encode($frame));
     }
@@ -358,6 +356,7 @@ class GoEMQTTMirror extends IPSModule
                 break;
             }
 
+/*            
             case 'Laden': {
                 // true -> Start (2), false -> Stop (1)
                 $frc = $Value ? 2 : 1;
@@ -367,13 +366,14 @@ class GoEMQTTMirror extends IPSModule
                 $this->SetValueSafe('Laden', (bool)$Value);
                 break;
             }
+*/
 
             case 'FRC': {
                 // Direkte Steuerung über das Integer-Profil (0/1/2)
                 $frc = in_array((int)$Value, [0,1,2], true) ? (int)$Value : 0;
                 $this->mqttPublish($this->bt('frc').'/set', (string)$frc, 0, false);
                 $this->SetValueSafe('FRC', $frc);
-                $this->SetValueSafe('Laden', $frc === 2);
+//                $this->SetValueSafe('Laden', $frc === 2);
                 break;
             }
         }
