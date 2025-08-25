@@ -74,43 +74,36 @@ trait MqttHandlersTrait
 
             case 'utc':
             {
-                $raw = trim($payload, "\" \t\n\r\0\x0B"); // z.B. 2025-08-11T11:55:42.988
+                $raw = trim($payload, "\" \t\n\r\0\x0B");  // z.B. 2025-08-11T11:55:42.988
+                $oldTs = 0;
+                $vid = @$this->GetIDForIdent('Uhrzeit');
+                if ($vid) { $oldTs = (int) @GetValue($vid); }
 
-                // robust gegen Millisekunden/ohne Z
-                $ts = 0;
+                // robust gegen Millisekunden
                 try {
                     $dt = new DateTime($raw, new DateTimeZone('UTC'));
-                    $ts = $dt->getTimestamp();
                 } catch (Throwable $e) {
-                    // Fallback: Millisekunden entfernen und erneut versuchen
                     $clean = preg_replace('/\.\d+/', '', $raw);
-                    try {
-                        $dt = new DateTime($clean, new DateTimeZone('UTC'));
-                        $ts = $dt->getTimestamp();
-                    } catch (Throwable $e2) {
-                        // Letzter Fallback: ignorieren
-                        break;
-                    }
+                    try { $dt = new DateTime($clean, new DateTimeZone('UTC')); }
+                    catch (Throwable $e2) { break; }
                 }
+                $ts = $dt->getTimestamp();
 
-                // → Integer mit Profil ~UnixTimestamp => WebFront zeigt lokale Zeit
-                $this->SetValueSafe('Uhrzeit', $ts);
+                if ($oldTs !== $ts) {
+                    $this->SetValueSafe('Uhrzeit', $ts);
+                    // Nur im Debug protokollieren
+                    $this->dbg('UTC→Uhrzeit', date('Y-m-d H:i:s T', $ts) . ' (ts=' . $ts . ')');
+                }
                 break;
             }
 
             case 'nrg':
             {
-                // 1) Optional ins Log schreiben, aber nur wenn Debug aktiv
+                // Nur wenn Debug aktiv: Rohpayload ins Log/Debug
                 if ($this->ReadPropertyBoolean('DebugLogging')) {
-                    // ins Instanz-Debug:
-                    $this->SendDebug('MQTT nrg (raw)', $payload, 0);
-
-                    // ins globale IPS-Log:
-                    $this->logDbg('nrg raw: ' . $payload);
+                    $this->dbg('MQTT nrg (raw)', $payload);
                 }
-
-                // 2) PTotal extrahieren & speichern (keine Roh-Variable!)
-                $this->parseAndStoreNRG($payload);
+                $this->parseAndStoreNRG($payload); // setzt Leistung_W
                 break;
             }
 

@@ -103,37 +103,62 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $auto  = trim($this->ReadAttributeString('AutoBaseTopic'));
         $state = $prop !== '' ? 'Fix (Property)' : ($auto !== '' ? 'Auto erkannt' : 'Unbekannt');
 
-        // Prefix aus module.json holen (Fallback: dein aktueller Prefix "GOEMQTT")
+        // Prefix dynamisch ermitteln (für Buttons)
         $inst   = @IPS_GetInstance($this->InstanceID);
         $mod    = is_array($inst) ? @IPS_GetModule($inst['ModuleID']) : null;
         $prefix = (is_array($mod) && !empty($mod['Prefix'])) ? $mod['Prefix'] : 'GOEMQTT';
 
-        return json_encode([
-            'elements' => [
-                ['type' => 'Label', 'caption' => 'MQTT BaseTopic'],
-                ['type' => 'RowLayout', 'items' => [
-                    ['type' => 'ValidationTextBox', 'name' => 'BaseTopic', 'caption' => 'BaseTopic (optional, leer = Auto)']
-                ]],
-                // Debug-Schalter:
-                ['type' => 'CheckBox', 'name' => 'DebugLogging', 'caption' => '🐞 Debug-Logging aktivieren (NRG roh ins IPS-Log & Instanz-Debug)'],
+        $elements = [];
+
+        // --- Abschnitt: MQTT / Geräte-Zuordnung ---
+        $elements[] = [
+            'type'    => 'GroupBox',
+            'caption' => 'MQTT / Geräte-Zuordnung',
+            'items'   => [
+                ['type' => 'Label', 'caption' => 'BaseTopic (leer = automatische Erkennung)'],
+                ['type' => 'ValidationTextBox', 'name' => 'BaseTopic', 'caption' => 'MQTT BaseTopic (optional)'],
 
                 ['type' => 'Label', 'caption' => 'Erkannt: ' . ($auto !== '' ? $auto : '—')],
-                ['type' => 'Label', 'caption' => 'Status: ' . $state]
-            ],
-            'actions' => [
+                ['type' => 'Label', 'caption' => 'Status: ' . $state],
+
+                // Buttons in einer Zeile
                 [
-                    'type'    => 'Button',
-                    'caption' => 'Erkannten BaseTopic übernehmen',
-                    'onClick' => sprintf('%s_ApplyDetectedBaseTopic($id);', $prefix),
-                    'enabled' => ($auto !== '' && $prop === '')
-                ],
-                [
-                    'type'    => 'Button',
-                    'caption' => 'Auto-Erkennung zurücksetzen',
-                    'onClick' => sprintf('%s_ClearDetectedBaseTopic($id);', $prefix),
-                    'enabled' => ($auto !== '')
+                    'type'  => 'RowLayout',
+                    'items' => [
+                        [
+                            'type'    => 'Button',
+                            'caption' => 'Erkannten BaseTopic übernehmen',
+                            'onClick' => sprintf('%s_ApplyDetectedBaseTopic($id);', $prefix),
+                            'enabled' => ($auto !== '' && $prop === '')
+                        ],
+                        [
+                            'type'    => 'Button',
+                            'caption' => 'Auto-Erkennung zurücksetzen',
+                            'onClick' => sprintf('%s_ClearDetectedBaseTopic($id);', $prefix),
+                            'enabled' => ($auto !== '')
+                        ]
+                    ]
                 ]
             ]
+        ];
+
+        // --- Abschnitt: Debug & Diagnose ---
+        $elements[] = [
+            'type'    => 'GroupBox',
+            'caption' => 'Debug & Diagnose',
+            'items'   => [
+                [
+                    'type'    => 'CheckBox',
+                    'name'    => 'DebugLogging',
+                    'caption' => '🐞 Debug-Logging aktivieren (NRG roh & Zeit-Updates ins IPS-Log + Instanz-Debug)'
+                ],
+                ['type' => 'Label', 'caption' => 'Hinweis: nrg kommt oft sekündlich – Debug nur kurzzeitig aktivieren.']
+            ]
+        ];
+
+        return json_encode([
+            'elements' => $elements,
+            'actions'  => [] // aktuell keine extra Actions
         ]);
     }
 

@@ -33,11 +33,18 @@ trait Helpers
         return ($base === '') ? $key : ($base . '/' . $key);
     }
 
-    protected function logDbg(string $msg): void
+    protected function dbg(string $title, string $message): void
     {
-        if ($this->ReadPropertyBoolean('DebugLogging')) {
-            IPS_LogMessage('PVWM2', $msg);
-        }
+        if (!$this->ReadPropertyBoolean('DebugLogging')) return;
+        $this->SendDebug($title, $message, 0);
+        IPS_LogMessage('GOEMQTT', $title . ': ' . $message); // Prefix/Tag
+    }
+
+    protected function dbgChanged(string $title, $old, $new): void
+    {
+        if (!$this->ReadPropertyBoolean('DebugLogging')) return;
+        // kompaktes Change-Log
+        $this->dbg($title, 'old=' . json_encode($old) . ' -> new=' . json_encode($new));
     }
 
 
