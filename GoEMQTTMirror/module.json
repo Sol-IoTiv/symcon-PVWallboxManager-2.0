@@ -1,9 +1,9 @@
 {
   "id": "{8A9D5F7C-0FBB-4F9C-BD75-7B6C0D1D7B10}",
-  "name": "GoEMQTTMirror",
+  "name": "PVWallboxManager 2.0 [MQTT]",
   "type": 3,
   "vendor": "PVWM",
-  "aliases": ["GoE MQTT Mirror"],
+  "aliases": ["PVWallboxManager 2.0 [MQTT]"],
   "parentRequirements": ["{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}"],
   "childRequirements": [],
   "implemented": ["{7F7632D9-FA40-4F38-8DEA-C83CD4325A32}"],
