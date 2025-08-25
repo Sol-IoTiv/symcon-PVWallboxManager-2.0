@@ -15,45 +15,35 @@ trait MqttHandlersTrait
         $base   = $this->currentBaseTopic();
         $filter = trim($this->ReadPropertyString('DeviceIDFilter'));
 
-        // 1) BaseTopic unbekannt → aus Topic ableiten (go-eCharger/<id>)
+        // Auto-BaseTopic erkennen
         if ($base === '') {
             if (preg_match('#^(go-eCharger/([^/]+))/#', $topic, $m)) {
-                $detectedBase = $m[1];   // go-eCharger/<id>
-                $detectedId   = $m[2];   // <id>
+                $detectedBase = $m[1];
+                $detectedId   = $m[2];
 
-                // Falls Filter gesetzt: nur diese ID akzeptieren
-                if ($filter !== '' && $filter !== $detectedId) {
-                    return; // falsches Gerät für diese Instanz
-                }
+                if ($filter !== '' && $filter !== $detectedId) return;
 
                 if ($detectedBase !== '' && $this->ReadAttributeString('AutoBaseTopic') !== $detectedBase) {
                     $this->WriteAttributeString('AutoBaseTopic', $detectedBase);
-
-                    // ℹ️ Seltenes Event: immer loggen (Instanz-Debug + Meldungen)
                     $this->infoLog('Auto-BaseTopic' . $this->dbgCtx($topic), $detectedBase, true);
-
-                    // zusätzlich konkret subscriben
                     $this->mqttSubscribe($detectedBase . '/+', 0);
                 }
             } else {
-                return; // kein go-eCharger Topic
+                return;
             }
         } else {
-            // BaseTopic gesetzt → alles außerhalb ignorieren
             if (strpos($topic, $base . '/') !== 0) return;
         }
 
-        // 2) Key bestimmen
+        // Key bestimmen
         $baseNow = $this->currentBaseTopic();
         if ($baseNow !== '' && strpos($topic, $baseNow . '/') === 0) {
             $key = substr($topic, strlen($baseNow) + 1);
         } else {
-            // Auto-Phase: letztes Segment als Key
             $parts = explode('/', $topic);
             $key = end($parts) ?: '';
         }
 
-        // 3) Werte verarbeiten
         switch ($key) {
             case 'ama':
             case 'amp':
@@ -62,7 +52,6 @@ trait MqttHandlersTrait
                 $old = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
                 if ($old !== $new) {
                     $this->SetValueSafe('Ampere_A', $new);
-                    // 🐞 Debug-Change mit ID-Kontext
                     $this->dbgChanged('Ampere' . $this->dbgCtx($topic), $old . ' A', $new . ' A');
                 }
                 break;
@@ -70,7 +59,7 @@ trait MqttHandlersTrait
 
             case 'psm':
             {
-                $new = (int)$payload; // 1 / 2
+                $new = (int)$payload; // 1/2
                 $old = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus'));
                 if ($old !== $new) {
                     $this->SetValueSafe('Phasenmodus', $new);
@@ -117,22 +106,19 @@ trait MqttHandlersTrait
 
                 if ($oldTs !== $ts) {
                     $this->SetValueSafe('Uhrzeit', $ts);
-                    $this->dbgLog('UTC→Uhrzeit' . $this->dbgCtx($topic), date('Y-m-d H:i:s T', $ts) . " (ts={$ts})");
-                    // optional zusätzlich: Roh-UTC protokollieren
-                    // $this->dbgMqtt('utc', $topic, $payload);
+                    $this->dbgLog('UTC → Uhrzeit' . $this->dbgCtx($topic), date('Y-m-d H:i:s T', $ts) . " (ts={$ts})");
                 }
                 break;
             }
 
             case 'nrg':
             {
-                $this->dbgMqtt('nrg', $topic, $payload); // gekürzt, mit ID
+                $this->dbgMqtt('nrg', $topic, $payload);
                 $this->parseAndStoreNRG($payload);
                 break;
             }
 
             default:
-                // weitere Topics später ergänzen
                 break;
         }
     }
@@ -145,7 +131,7 @@ trait MqttHandlersTrait
         if ($p !== '' && $p[0] === '[') {
             $arr = json_decode($p, true);
             if (is_array($arr) && isset($arr[11]) && is_numeric($arr[11])) {
-                $ptotal = (int)round((float)$arr[11]); // PTotal
+                $ptotal = (int)round((float)$arr[11]);
             }
         } else {
             $parts = preg_split('/[;,]/', $p);
@@ -153,7 +139,6 @@ trait MqttHandlersTrait
                 $ptotal = (int)round((float)$parts[11]);
             }
         }
-
         if ($ptotal !== null) {
             $this->SetValueSafe('Leistung_W', $ptotal);
         }

@@ -7,14 +7,13 @@ trait Profiles
     {
         if (!IPS_VariableProfileExists('GoE.CarState')) {
             IPS_CreateVariableProfile('GoE.CarState', VARIABLETYPE_INTEGER);
-            IPS_SetVariableProfileText('GoE.CarState', '', '');
             IPS_SetVariableProfileIcon('GoE.CarState', 'Car');
             IPS_SetVariableProfileAssociation('GoE.CarState', 0, 'Unbekannt/Firmwarefehler', '', -1);
-            IPS_SetVariableProfileAssociation('GoE.CarState', 1, 'Bereit, kein Fahrzeug', '', -1);
-            IPS_SetVariableProfileAssociation('GoE.CarState', 2, 'Fahrzeug lädt', '', -1);
-            IPS_SetVariableProfileAssociation('GoE.CarState', 3, 'Fahrzeug verbunden / bereit', '', -1);
-            IPS_SetVariableProfileAssociation('GoE.CarState', 4, 'Ladung beendet, noch verbunden', '', -1);
-            IPS_SetVariableProfileAssociation('GoE.CarState', 5, 'Fehler', '', -1);
+            IPS_SetVariableProfileAssociation('GoE.CarState', 1, 'Bereit, kein Fahrzeug',   '', -1);
+            IPS_SetVariableProfileAssociation('GoE.CarState', 2, 'Fahrzeug lädt',          '', -1);
+            IPS_SetVariableProfileAssociation('GoE.CarState', 3, 'Verbunden / bereit',     '', -1);
+            IPS_SetVariableProfileAssociation('GoE.CarState', 4, 'Ladung beendet',         '', -1);
+            IPS_SetVariableProfileAssociation('GoE.CarState', 5, 'Fehler',                 '', -1);
         }
 
         if (!IPS_VariableProfileExists('GoE.Amp')) {
@@ -31,9 +30,9 @@ trait Profiles
 
         if (!IPS_VariableProfileExists('GoE.ForceState')) {
             IPS_CreateVariableProfile('GoE.ForceState', VARIABLETYPE_INTEGER);
-            IPS_SetVariableProfileAssociation('GoE.ForceState', 0, 'Neutral', '', -1);
-            IPS_SetVariableProfileAssociation('GoE.ForceState', 1, 'Stop (Force-Off)', '', -1);
-            IPS_SetVariableProfileAssociation('GoE.ForceState', 2, 'Start (Force-On)', '', -1);
+            IPS_SetVariableProfileAssociation('GoE.ForceState', 0, 'Neutral',    '', -1);
+            IPS_SetVariableProfileAssociation('GoE.ForceState', 1, 'Stop',       '', -1);
+            IPS_SetVariableProfileAssociation('GoE.ForceState', 2, 'Start',      '', -1);
         }
     }
 }
