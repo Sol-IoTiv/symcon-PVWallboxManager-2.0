@@ -453,7 +453,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         }
     }
 
-
     public function ApplyDetectedBaseTopic(): void
     {
         $auto = trim($this->ReadAttributeString('AutoBaseTopic'));
