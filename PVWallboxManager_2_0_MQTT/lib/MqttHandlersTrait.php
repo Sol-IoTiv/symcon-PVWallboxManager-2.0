@@ -28,7 +28,14 @@ trait MqttHandlersTrait
 
                 if ($detectedBase !== '' && $this->ReadAttributeString('AutoBaseTopic') !== $detectedBase) {
                     $this->WriteAttributeString('AutoBaseTopic', $detectedBase);
-                    $this->LogMessage('Auto-BaseTopic erkannt: ' . $detectedBase, KL_MESSAGE);
+
+                    // ← Loggen der Erkennung (seltenes Event):
+                    // immer im Instanz-Debug …
+                    $this->SendDebug('Auto-BaseTopic', $detectedBase, 0);
+                    // … und NUR wenn DebugLogging aktiv ist auch ins globale Log:
+                    if ($this->ReadPropertyBoolean('DebugLogging')) {
+                        IPS_LogMessage('GOEMQTT', 'Auto-BaseTopic erkannt: ' . $detectedBase);
+                    }
 
                     // zusätzlich konkret subscriben
                     $this->mqttSubscribe($detectedBase . '/+', 0);
@@ -74,36 +81,35 @@ trait MqttHandlersTrait
 
             case 'utc':
             {
-                $raw = trim($payload, "\" \t\n\r\0\x0B");  // z.B. 2025-08-11T11:55:42.988
-                $oldTs = 0;
-                $vid = @$this->GetIDForIdent('Uhrzeit');
-                if ($vid) { $oldTs = (int) @GetValue($vid); }
+                $raw = trim($payload, "\" \t\n\r\0\x0B");
+                $oldTs = (int)@GetValue(@$this->GetIDForIdent('Uhrzeit')) ?: 0;
 
-                // robust gegen Millisekunden
                 try {
                     $dt = new DateTime($raw, new DateTimeZone('UTC'));
                 } catch (Throwable $e) {
-                    $clean = preg_replace('/\.\d+/', '', $raw);
-                    try { $dt = new DateTime($clean, new DateTimeZone('UTC')); }
+                    $raw = preg_replace('/\.\d+/', '', $raw);
+                    try { $dt = new DateTime($raw, new DateTimeZone('UTC')); }
                     catch (Throwable $e2) { break; }
                 }
                 $ts = $dt->getTimestamp();
 
                 if ($oldTs !== $ts) {
                     $this->SetValueSafe('Uhrzeit', $ts);
-                    // Nur im Debug protokollieren
-                    $this->dbg('UTC→Uhrzeit', date('Y-m-d H:i:s T', $ts) . ' (ts=' . $ts . ')');
+                    // Nur Instanz-Debug, KEIN IPS_LogMessage (VariableManager loggt Änderung ohnehin)
+                    if ($this->ReadPropertyBoolean('DebugLogging')) {
+                        $this->SendDebug('UTC→Uhrzeit', date('Y-m-d H:i:s T', $ts) . " (ts=$ts)", 0);
+                    }
                 }
                 break;
             }
 
             case 'nrg':
             {
-                // Nur wenn Debug aktiv: Rohpayload ins Log/Debug
+                // Nur Instanz-Debug, KEIN IPS_LogMessage
                 if ($this->ReadPropertyBoolean('DebugLogging')) {
-                    $this->dbg('MQTT nrg (raw)', $payload);
+                    $this->SendDebug('MQTT nrg (raw)', $payload, 0);
                 }
-                $this->parseAndStoreNRG($payload); // setzt Leistung_W
+                $this->parseAndStoreNRG($payload);
                 break;
             }
 

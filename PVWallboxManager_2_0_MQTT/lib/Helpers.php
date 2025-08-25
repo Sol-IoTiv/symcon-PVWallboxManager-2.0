@@ -33,11 +33,13 @@ trait Helpers
         return ($base === '') ? $key : ($base . '/' . $key);
     }
 
-    protected function dbg(string $title, string $message): void
+    protected function dbg(string $title, string $message, bool $alsoMessages = false): void
     {
         if (!$this->ReadPropertyBoolean('DebugLogging')) return;
         $this->SendDebug($title, $message, 0);
-        IPS_LogMessage('GOEMQTT', $title . ': ' . $message); // Prefix/Tag
+        if ($alsoMessages) {
+            IPS_LogMessage('GOEMQTT', $title . ': ' . $message); // nur wenn explizit gewünscht
+        }
     }
 
     protected function dbgChanged(string $title, $old, $new): void
