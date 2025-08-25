@@ -95,7 +95,7 @@ trait MqttHandlersTrait
 
                 if ($oldTs !== $ts) {
                     $this->SetValueSafe('Uhrzeit', $ts);
-                    $this->dbgLog('MQTT nrg (raw)', $payload);
+                    $this->dbgLog('MQTT utc (raw)', $payload);
                     $this->parseAndStoreNRG($payload);
                 }
                 break;
