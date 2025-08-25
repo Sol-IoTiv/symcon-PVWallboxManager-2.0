@@ -25,7 +25,7 @@ class GoEMQTTMirror extends IPSModule
         $this->RegisterVariableInteger('Leistung_W',        'Leistung [W]',             '~Watt',  20);
         $this->RegisterVariableInteger('CarState',          'Fahrzeugstatus',           'GoE.CarState', 25);
         $this->RegisterVariableBoolean('FahrzeugVerbunden', 'Fahrzeug verbunden',       '~Switch',30);
-        $this->RegisterVariableBoolean('ALW',               'Allow Charging (ALW)',     '~Switch', 40);
+//        $this->RegisterVariableBoolean('ALW',               'Allow Charging (ALW)',     '~Switch', 40);
 //        $this->RegisterVariableBoolean('Laden',             'Laden',                    '~Switch', 45);
 //        $this->EnableAction('Laden');
         $this->RegisterVariableInteger('FRC',               'Force State (FRC)',        'GoE.ForceState', 50);
@@ -106,13 +106,15 @@ class GoEMQTTMirror extends IPSModule
             case 'amp':
                 $this->SetValueSafe('Ampere_A', (int)$payload);
                 break;
-
+                
+/*
             case 'alw':
             {
                 // v2: read-only Anzeige (true/false)
                 $this->SetValueSafe('ALW', ((int)$payload) === 1);
                 break;
             }
+*/
 
             case 'frc':
             {
