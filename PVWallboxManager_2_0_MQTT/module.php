@@ -91,7 +91,9 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterAttributeInteger('LastPhaseSwitchMs', 0);
 
         // --- Timer für Control-Loop ---
-        $this->RegisterTimer('LOOP', 0, $this->modulePrefix().'_Loop($id);');
+//        $this->RegisterTimer('LOOP', 0, $this->modulePrefix().'_Loop($id);');
+        $this->RegisterTimer('LOOP', 0, $this->modulePrefix().'_Loop($_IPS[\'TARGET\']);');
+
 
         // Debug / Rohwerte
 //        $this->RegisterVariableString('NRG_RAW',      'NRG (roh)',         '~TextBox',       90);
@@ -128,7 +130,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         // Loop Timer
         $enabled  = $this->ReadPropertyBoolean('CtrlEnabled');
         $interval = max(200, (int)$this->ReadPropertyInteger('CtrlIntervalMs'));
-        $this->SetTimerInterval('LOOP', $enabled ? $interval : 0);
+//        $this->SetTimerInterval('LOOP', $enabled ? $interval : 0);
+        $this->RegisterTimer('LOOP', $enabled ? $interval : 0, $this->modulePrefix().'_Loop($_IPS[\'TARGET\']);');
 
         $this->SetStatus(IS_ACTIVE);
     }
