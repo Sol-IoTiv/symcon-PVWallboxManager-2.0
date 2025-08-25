@@ -105,7 +105,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterPropertyInteger('RampHoldMs', 3000);          // min. Abstand zw. Amp-Schritten
         $this->RegisterPropertyInteger('RampStepA', 1);              // 1 A pro Schritt
         $this->RegisterAttributeInteger('SmoothSurplusW', 0);
-        smoothSurplus$this->RegisterAttributeInteger('LastAmpChangeMs', 0)
+        $this->RegisterAttributeInteger('LastAmpChangeMs', 0);
+
 
         // --- Timer für Control-Loop ---
         $this->RegisterTimer('LOOP', 0, $this->modulePrefix()."_Loop(\$_IPS['TARGET']);");
