@@ -546,5 +546,155 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         return $attr;
     }
 
+    public function GetConfigurationForm()
+    {
+        // Prefix sauber ermitteln (Fallback: PVWM)
+        $inst   = @IPS_GetInstance($this->InstanceID);
+        $mod    = (is_array($inst) && isset($inst['ModuleID'])) ? @IPS_GetModule($inst['ModuleID']) : null;
+        $prefix = (is_array($mod) && !empty($mod['Prefix'])) ? $mod['Prefix'] : 'PVWM';
+
+        $prop  = trim($this->ReadPropertyString('BaseTopic'));
+        $auto  = trim($this->ReadAttributeString('AutoBaseTopic'));
+        $state = ($prop !== '') ? 'Fix (Property)' : (($auto !== '') ? 'Auto erkannt' : 'Unbekannt');
+
+        $form = [
+            'elements' => [
+
+                // MQTT
+                [
+                    'type'    => 'ExpansionPanel',
+                    'caption' => 'MQTT / Geräte-Zuordnung',
+                    'items'   => [
+                        ['type' => 'Label', 'caption' => 'BaseTopic (leer = automatische Erkennung)'],
+                        ['type' => 'ValidationTextBox', 'name' => 'BaseTopic', 'caption' => 'MQTT BaseTopic (optional)'],
+                        ['type' => 'Label', 'caption' => 'Erkannt: ' . ($auto !== '' ? $auto : '—')],
+                        ['type' => 'Label', 'caption' => 'Status: ' . $state],
+                        [
+                            'type'  => 'RowLayout',
+                            'items' => [
+                                [
+                                    'type'    => 'Button',
+                                    'caption' => 'Erkannten BaseTopic übernehmen',
+                                    'onClick' => sprintf('%s_ApplyDetectedBaseTopic($id);', $prefix),
+                                    'enabled' => ($auto !== '' && $prop === '')
+                                ],
+                                [
+                                    'type'    => 'Button',
+                                    'caption' => 'Auto-Erkennung zurücksetzen',
+                                    'onClick' => sprintf('%s_ClearDetectedBaseTopic($id);', $prefix),
+                                    'enabled' => ($auto !== '')
+                                ]
+                            ]
+                        ],
+                        ['type' => 'ValidationTextBox', 'name' => 'DeviceIDFilter', 'caption' => 'DeviceID-Filter (optional)']
+                    ]
+                ],
+
+                // Energiequellen
+                [
+                    'type'    => 'ExpansionPanel',
+                    'caption' => 'Energiequellen',
+                    'items'   => [
+                        ['type' => 'Label', 'caption' => 'Pflicht: PV-Erzeugung & Hausverbrauch. Batterie optional.'],
+                        [
+                            'type'  => 'RowLayout',
+                            'items' => [
+                                ['type' => 'SelectVariable', 'name' => 'VarPV_ID', 'caption' => 'PV-Erzeugung'],
+                                [
+                                    'type'    => 'Select',
+                                    'name'    => 'VarPV_Unit',
+                                    'caption' => 'Einheit',
+                                    'options' => [
+                                        ['caption' => 'Watt (W)', 'value' => 'W'],
+                                        ['caption' => 'Kilowatt (kW)', 'value' => 'kW']
+                                    ]
+                                ]
+                            ]
+                        ],
+                        [
+                            'type'  => 'RowLayout',
+                            'items' => [
+                                ['type' => 'SelectVariable', 'name' => 'VarHouse_ID', 'caption' => 'Gesamter Hausverbrauch'],
+                                [
+                                    'type'    => 'Select',
+                                    'name'    => 'VarHouse_Unit',
+                                    'caption' => 'Einheit',
+                                    'options' => [
+                                        ['caption' => 'Watt (W)', 'value' => 'W'],
+                                        ['caption' => 'Kilowatt (kW)', 'value' => 'kW']
+                                    ]
+                                ]
+                            ]
+                        ],
+                        [
+                            'type'  => 'RowLayout',
+                            'items' => [
+                                ['type' => 'SelectVariable', 'name' => 'VarBattery_ID', 'caption' => 'Batterieleistung (+=Laden)'],
+                                [
+                                    'type'    => 'Select',
+                                    'name'    => 'VarBattery_Unit',
+                                    'caption' => 'Einheit',
+                                    'options' => [
+                                        ['caption' => 'Watt (W)', 'value' => 'W'],
+                                        ['caption' => 'Kilowatt (kW)', 'value' => 'kW']
+                                    ]
+                                ],
+                                ['type' => 'CheckBox', 'name' => 'BatteryPositiveIsCharge', 'caption' => 'Positiv = Laden (invertieren, falls nötig)']
+                            ]
+                        ]
+                    ]
+                ],
+
+                // Regelung
+                [
+                    'type'    => 'ExpansionPanel',
+                    'caption' => 'Regelung',
+                    'items'   => [
+                        ['type' => 'NumberSpinner', 'name' => 'StartThresholdW', 'caption' => 'Start bei PV-Überschuss (W)'],
+                        ['type' => 'NumberSpinner', 'name' => 'StartCycles',     'caption' => 'Start-Hysterese (Zyklen)'],
+                        ['type' => 'NumberSpinner', 'name' => 'StopThresholdW',  'caption' => 'Stop bei fehlendem PV-Überschuss (W)'],
+                        ['type' => 'NumberSpinner', 'name' => 'StopCycles',      'caption' => 'Stop-Hysterese (Zyklen)'],
+
+                        ['type' => 'NumberSpinner', 'name' => 'ThresTo1p_W', 'caption' => 'Schwelle auf 1-phasig (W)'],
+                        ['type' => 'NumberSpinner', 'name' => 'To1pCycles',  'caption' => 'Zählerlimit 1-phasig'],
+                        ['type' => 'NumberSpinner', 'name' => 'ThresTo3p_W', 'caption' => 'Schwelle auf 3-phasig (W)'],
+                        ['type' => 'NumberSpinner', 'name' => 'To3pCycles',  'caption' => 'Zählerlimit 3-phasig'],
+
+                        ['type' => 'NumberSpinner', 'name' => 'MinAmp',      'caption' => 'Min. Ampere'],
+                        ['type' => 'NumberSpinner', 'name' => 'MaxAmp',      'caption' => 'Max. Ampere'],
+                        ['type' => 'NumberSpinner', 'name' => 'NominalVolt', 'caption' => 'Nennspannung pro Phase (V)'],
+
+                        ['type' => 'NumberSpinner', 'name' => 'MinHoldAfterPhaseMs', 'caption' => 'Sperrzeit nach Phasenwechsel (ms)'],
+                        ['type' => 'NumberSpinner', 'name' => 'MinPublishGapMs',     'caption' => 'Mindestabstand ama/set (ms)'],
+                        ['type' => 'NumberSpinner', 'name' => 'WBSubtractMinW',      'caption' => 'WB abziehen erst ab (W)'],
+                        ['type' => 'NumberSpinner', 'name' => 'StartReserveW',       'caption' => 'Start-Reserve (W)'],
+                        ['type' => 'NumberSpinner', 'name' => 'MinOnTimeMs',         'caption' => 'Min. EIN-Zeit FRC (ms)'],
+                        ['type' => 'NumberSpinner', 'name' => 'MinOffTimeMs',        'caption' => 'Min. AUS-Zeit FRC (ms)']
+                    ]
+                ],
+
+                // Debug
+                [
+                    'type'    => 'ExpansionPanel',
+                    'caption' => 'Debug & Diagnose',
+                    'items'   => [
+                        ['type' => 'CheckBox', 'name' => 'DebugLogging', 'caption' => 'Debug-Logging aktivieren (Instanz-Debug & Meldungen)']
+                    ]
+                ],
+            ]
+        ];
+
+        $json = json_encode($form, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+        if ($json === false || $json === null) {
+            // Fallback, falls es doch hakt
+            $fallback = [
+                'elements' => [
+                    ['type' => 'Label', 'caption' => 'Form konnte nicht erzeugt werden (json_encode Fehler).']
+                ]
+            ];
+            return json_encode($fallback);
+        }
+        return $json;
+    }
 
 }
