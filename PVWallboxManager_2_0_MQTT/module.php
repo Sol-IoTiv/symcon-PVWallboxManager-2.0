@@ -92,7 +92,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         // --- Timer für Control-Loop ---
 //        $this->RegisterTimer('LOOP', 0, $this->modulePrefix().'_Loop($id);');
-        $this->RegisterTimer('LOOP', 0, $this->modulePrefix().'_Loop($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('LOOP', 0, $this->modulePrefix()."_Loop(\$_IPS['TARGET']);");
+
 
 
         // Debug / Rohwerte
@@ -120,20 +121,34 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             if ($cur !== $clamped) { @SetValue($vidAmp, $clamped); }
         }
 
-        // MQTT attach + Subscribe
+        // --- MQTT attach + Subscribe ---
         if (!$this->attachAndSubscribe()) {
+            // Timer aus, Status Fehler
             $this->SetTimerInterval('LOOP', 0);
             $this->SetStatus(IS_EBASE + 2);
             return;
         }
 
-        // Loop Timer (Skript + Intervall sicher setzen)
+        // --- LOOP-Timer sicherstellen (ohne UnregisterTimer) ---
         $enabled  = $this->ReadPropertyBoolean('CtrlEnabled');
         $interval = max(200, (int)$this->ReadPropertyInteger('CtrlIntervalMs'));
 
-        // erst löschen, dann neu anlegen -> kein "ist bereits vorhanden"
-        $this->UnregisterTimer('LOOP');
-        $this->RegisterTimer('LOOP', $enabled ? $interval : 0, $this->modulePrefix().'_Loop($_IPS[\'TARGET\']);');
+        // 1) Event-ID des Timers ermitteln (per Ident)
+        $eid = @IPS_GetObjectIDByIdent('LOOP', $this->InstanceID);
+        $wantedScript = $this->modulePrefix() . "_Loop(\$_IPS['TARGET']);";
+
+        // 2) Falls Timer fehlt (alte Instanz?), neu anlegen
+        if (!$eid) {
+            $this->RegisterTimer('LOOP', 0, $wantedScript);
+            $eid = @IPS_GetObjectIDByIdent('LOOP', $this->InstanceID);
+        } else {
+            // 3) Script-Text ggf. auf neuen Inhalt setzen (Migration von `$id` -> $_IPS['TARGET'])
+            // Achtung: manche Builds haben 'EventScript' nicht im Array – Setzen ist unkritisch.
+            @IPS_SetEventScript($eid, $wantedScript);
+        }
+
+        // 4) Intervall setzen/aktivieren
+        $this->SetTimerInterval('LOOP', $enabled ? $interval : 0);
 
         $this->SetStatus(IS_ACTIVE);
     }
