@@ -29,14 +29,8 @@ trait MqttHandlersTrait
                 if ($detectedBase !== '' && $this->ReadAttributeString('AutoBaseTopic') !== $detectedBase) {
                     $this->WriteAttributeString('AutoBaseTopic', $detectedBase);
 
-                    // ← Loggen der Erkennung (seltenes Event):
-                    // immer im Instanz-Debug …
-                    $this->infoLog('Auto-BaseTopic' . $this->dbgCtx($topic), $detectedBase, true); // ℹ️ immer
-
-                    // … und NUR wenn DebugLogging aktiv ist auch ins globale Log:
-                    if ($this->ReadPropertyBoolean('DebugLogging')) {
-                        IPS_LogMessage('GOEMQTT', 'Auto-BaseTopic erkannt: ' . $detectedBase);
-                    }
+                    // ℹ️ Seltenes Event: immer loggen (Instanz-Debug + Meldungen)
+                    $this->infoLog('Auto-BaseTopic' . $this->dbgCtx($topic), $detectedBase, true);
 
                     // zusätzlich konkret subscriben
                     $this->mqttSubscribe($detectedBase . '/+', 0);
