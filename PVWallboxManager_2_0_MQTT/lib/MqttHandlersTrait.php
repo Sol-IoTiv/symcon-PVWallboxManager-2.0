@@ -31,7 +31,8 @@ trait MqttHandlersTrait
 
                     // ← Loggen der Erkennung (seltenes Event):
                     // immer im Instanz-Debug …
-                    $this->SendDebug('Auto-BaseTopic', $detectedBase, 0);
+                    $this->infoLog('Auto-BaseTopic' . $this->dbgCtx($topic), $detectedBase, true); // ℹ️ immer
+
                     // … und NUR wenn DebugLogging aktiv ist auch ins globale Log:
                     if ($this->ReadPropertyBoolean('DebugLogging')) {
                         IPS_LogMessage('GOEMQTT', 'Auto-BaseTopic erkannt: ' . $detectedBase);
@@ -62,22 +63,49 @@ trait MqttHandlersTrait
         switch ($key) {
             case 'ama':
             case 'amp':
-                $this->SetValueSafe('Ampere_A', (int)$payload);
+            {
+                $new = (int)$payload;
+                $old = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
+                if ($old !== $new) {
+                    $this->SetValueSafe('Ampere_A', $new);
+                    // 🐞 Debug-Change mit ID-Kontext
+                    $this->dbgChanged('Ampere' . $this->dbgCtx($topic), $old . ' A', $new . ' A');
+                }
                 break;
-
-            case 'frc':
-                $this->SetValueSafe('FRC', (int)$payload);
-                break;
-
-            case 'car':
-                $state = is_numeric($payload) ? (int)$payload : 0;
-                $this->SetValueSafe('CarState', $state);
-                break;
+            }
 
             case 'psm':
-                $pm = (int)$payload; // 1/2
-                $this->SetValueSafe('Phasenmodus', $pm);
+            {
+                $new = (int)$payload; // 1 / 2
+                $old = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus'));
+                if ($old !== $new) {
+                    $this->SetValueSafe('Phasenmodus', $new);
+                    $this->dbgChanged('Phasenmodus' . $this->dbgCtx($topic), $this->phaseModeLabel($old), $this->phaseModeLabel($new));
+                }
                 break;
+            }
+
+            case 'frc':
+            {
+                $new = (int)$payload; // 0/1/2
+                $old = (int)@GetValue(@$this->GetIDForIdent('FRC'));
+                if ($old !== $new) {
+                    $this->SetValueSafe('FRC', $new);
+                    $this->dbgChanged('FRC' . $this->dbgCtx($topic), $this->frcLabel($old), $this->frcLabel($new));
+                }
+                break;
+            }
+
+            case 'car':
+            {
+                $new = is_numeric($payload) ? (int)$payload : 0;
+                $old = (int)@GetValue(@$this->GetIDForIdent('CarState'));
+                if ($old !== $new) {
+                    $this->SetValueSafe('CarState', $new);
+                    $this->dbgChanged('CarState' . $this->dbgCtx($topic), $this->carStateLabel($old), $this->carStateLabel($new));
+                }
+                break;
+            }
 
             case 'utc':
             {
@@ -87,23 +115,24 @@ trait MqttHandlersTrait
                 try {
                     $dt = new DateTime($raw, new DateTimeZone('UTC'));
                 } catch (Throwable $e) {
-                    $raw = preg_replace('/\.\d+/', '', $raw);
-                    try { $dt = new DateTime($raw, new DateTimeZone('UTC')); }
+                    $rawNoMs = preg_replace('/\.\d+/', '', $raw);
+                    try { $dt = new DateTime($rawNoMs, new DateTimeZone('UTC')); }
                     catch (Throwable $e2) { break; }
                 }
                 $ts = $dt->getTimestamp();
 
                 if ($oldTs !== $ts) {
                     $this->SetValueSafe('Uhrzeit', $ts);
-                    $this->dbgLog('MQTT utc (raw)', $payload);
-                    $this->parseAndStoreNRG($payload);
+                    $this->dbgLog('UTC→Uhrzeit' . $this->dbgCtx($topic), date('Y-m-d H:i:s T', $ts) . " (ts={$ts})");
+                    // optional zusätzlich: Roh-UTC protokollieren
+                    // $this->dbgMqtt('utc', $topic, $payload);
                 }
                 break;
             }
 
             case 'nrg':
             {
-                $this->dbgLog('MQTT nrg (raw)', $payload);
+                $this->dbgMqtt('nrg', $topic, $payload); // gekürzt, mit ID
                 $this->parseAndStoreNRG($payload);
                 break;
             }
