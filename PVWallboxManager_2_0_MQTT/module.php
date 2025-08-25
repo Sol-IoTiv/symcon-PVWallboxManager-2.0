@@ -128,11 +128,11 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         }
 
         // Loop Timer
+        // Loop Timer (Skript + Intervall setzen/aktualisieren)
         $enabled  = $this->ReadPropertyBoolean('CtrlEnabled');
         $interval = max(200, (int)$this->ReadPropertyInteger('CtrlIntervalMs'));
-//        $this->SetTimerInterval('LOOP', $enabled ? $interval : 0);
         $this->RegisterTimer('LOOP', $enabled ? $interval : 0, $this->modulePrefix().'_Loop($_IPS[\'TARGET\']);');
-
+        
         $this->SetStatus(IS_ACTIVE);
     }
 
