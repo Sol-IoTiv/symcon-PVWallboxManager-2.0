@@ -3,7 +3,6 @@ declare(strict_types=1);
 
 trait MqttHandlersTrait
 {
-    // Empfangene MQTT-PUBLISH Frames
     public function ReceiveData($JSONString)
     {
         $data = json_decode($JSONString, true);
@@ -11,17 +10,34 @@ trait MqttHandlersTrait
 
         $topic   = (string)($data['Topic']   ?? '');
         $payload = (string)($data['Payload'] ?? '');
+        if ($topic === '') return;
 
-        $base = (string)$this->ReadPropertyString('BaseTopic');
-        if ($base === '') return;
+        // 1) Falls BaseTopic noch unbekannt: aus Topic ableiten (go-eCharger/<id>)
+        $base = $this->currentBaseTopic();
+        if ($base === '') {
+            if (preg_match('#^(go-eCharger/[^/]+)/#', $topic, $m)) {
+                $detected = $m[1];
+                if ($detected !== '' && $this->ReadAttributeString('AutoBaseTopic') !== $detected) {
+                    $this->WriteAttributeString('AutoBaseTopic', $detected);
+                    $this->LogMessage('Auto-BaseTopic erkannt: ' . $detected, KL_MESSAGE);
 
-        $baseWithSlash = rtrim($base, '/') . '/';
-        if ($topic === '' || strpos($topic, $baseWithSlash) !== 0) {
-            return; // andere Topics ignorieren
+                    // Optional: zusätzlich den konkreten Stamm abonnieren (breiter Subscribe bleibt bestehen)
+                    $this->mqttSubscribe($detected . '/+', 0);
+                }
+            }
         }
 
-        $key = substr($topic, strlen($baseWithSlash)); // z.B. "nrg","car","amp","alw","psm","utc","frc","ama"
+        // 2) Key bestimmen
+        $base = $this->currentBaseTopic();
+        if ($base !== '' && strpos($topic, $base . '/') === 0) {
+            $key = substr($topic, strlen($base) + 1);
+        } else {
+            // Auto-Phase: letztes Segment als Key
+            $parts = explode('/', $topic);
+            $key = end($parts) ?: '';
+        }
 
+        // 3) Werte verarbeiten
         switch ($key) {
             case 'ama':
             case 'amp':
@@ -29,8 +45,7 @@ trait MqttHandlersTrait
                 break;
 
             case 'frc':
-                $v = (int)$payload; // 0/1/2
-                $this->SetValueSafe('FRC', $v);
+                $this->SetValueSafe('FRC', (int)$payload);
                 break;
 
             case 'car':
@@ -53,21 +68,20 @@ trait MqttHandlersTrait
                 break;
 
             default:
-                // Optional: Weitere Topics später hier ergänzen
+                // weitere Topics später ergänzen
                 break;
         }
     }
 
-    // PTotal (Index 11) aus NRG-Frame extrahieren
     private function parseAndStoreNRG(string $payload): void
     {
         $p = trim($payload, "\" \t\n\r\0\x0B");
-
         $ptotal = null;
+
         if ($p !== '' && $p[0] === '[') {
             $arr = json_decode($p, true);
             if (is_array($arr) && isset($arr[11]) && is_numeric($arr[11])) {
-                $ptotal = (int)round((float)$arr[11]);
+                $ptotal = (int)round((float)$arr[11]); // PTotal
             }
         } else {
             $parts = preg_split('/[;,]/', $p);

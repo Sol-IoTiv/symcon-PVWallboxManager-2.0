@@ -14,9 +14,22 @@ trait Helpers
         }
     }
 
-    // BaseTopic + Key
+    // Liefert den aktuell gültigen BaseTopic: Property > Auto-Attribute
+    protected function currentBaseTopic(): string
+    {
+        $p = trim((string)$this->ReadPropertyString('BaseTopic'));
+        if ($p !== '') return rtrim($p, '/');
+
+        $a = trim((string)$this->ReadAttributeString('AutoBaseTopic'));
+        if ($a !== '') return rtrim($a, '/');
+
+        return '';
+    }
+
+    // <BaseTopic>/<key>
     protected function bt(string $key): string
     {
-        return rtrim((string)$this->ReadPropertyString('BaseTopic'), '/') . '/' . $key;
+        $base = $this->currentBaseTopic();
+        return ($base === '') ? $key : ($base . '/' . $key);
     }
 }

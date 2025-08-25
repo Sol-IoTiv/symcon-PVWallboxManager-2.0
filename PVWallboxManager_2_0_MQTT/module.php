@@ -22,7 +22,11 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         parent::Create();
 
         // Properties
-        $this->RegisterPropertyString('BaseTopic', 'go-eCharger/285450');
+//        $this->RegisterPropertyString('BaseTopic', 'go-eCharger/285450');
+        
+        // --- Properties & Auto-Modus ---
+        $this->RegisterPropertyString('BaseTopic', '');            // leer => Auto
+        $this->RegisterAttributeString('AutoBaseTopic', '');       // erkannter Stamm
 
         // Profile sicherstellen
         $this->ensureProfiles();
@@ -86,4 +90,48 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 break;
         }
     }
+
+    // -------- Konfig-Dialog (form.json inline) --------
+    public function GetConfigurationForm()
+    {
+        $prop  = trim($this->ReadPropertyString('BaseTopic'));
+        $auto  = trim($this->ReadAttributeString('AutoBaseTopic'));
+        $state = $prop !== '' ? 'Fix (Property)' : ($auto !== '' ? 'Auto erkannt' : 'Unbekannt');
+
+        $form = [
+            'elements' => [
+                ['type' => 'Label', 'caption' => 'MQTT BaseTopic'],
+                ['type' => 'RowLayout', 'items' => [
+                    ['type' => 'ValidationTextBox', 'name' => 'BaseTopic', 'caption' => 'BaseTopic (optional, leer = Auto)']
+                ]],
+                ['type' => 'Label', 'caption' => sprintf('Erkannt: %s', $auto !== '' ? $auto : '—')],
+                ['type' => 'Label', 'caption' => sprintf('Status: %s', $state)]
+            ],
+            'actions' => [
+                ['type' => 'Button', 'caption' => 'Erkannten BaseTopic übernehmen', 'onClick' => 'PVWM2_ApplyDetectedBaseTopic($id);', 'enabled' => ($auto !== '' && $prop === '')],
+                ['type' => 'Button', 'caption' => 'Auto-Erkennung zurücksetzen',     'onClick' => 'PVWM2_ClearDetectedBaseTopic($id);', 'enabled' => ($auto !== '')]
+            ]
+        ];
+        return json_encode($form);
+    }
+
+    // Button: AutoBaseTopic -> Property übernehmen
+    public function ApplyDetectedBaseTopic(): void
+    {
+        $auto = trim($this->ReadAttributeString('AutoBaseTopic'));
+        if ($auto === '') {
+            $this->LogMessage('Kein AutoBaseTopic vorhanden.', KL_WARNING);
+            return;
+        }
+        IPS_SetProperty($this->InstanceID, 'BaseTopic', $auto);
+        IPS_ApplyChanges($this->InstanceID);
+    }
+
+    // Button: Auto-Erkennung löschen
+    public function ClearDetectedBaseTopic(): void
+    {
+        $this->WriteAttributeString('AutoBaseTopic', '');
+        IPS_ApplyChanges($this->InstanceID);
+    }
+
 }

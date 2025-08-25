@@ -3,36 +3,41 @@ declare(strict_types=1);
 
 trait MqttClientTrait
 {
-    // MQTT DataIDs (Symcon 8.1)
-    private const MQTT_TX = '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}'; // Child -> Parent
-    private const MQTT_RX = '{7F7632D9-FA40-4F38-8DEA-C83CD4325A32}'; // Parent -> Child
+    private const MQTT_TX = '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}';
+    private const MQTT_RX = '{7F7632D9-FA40-4F38-8DEA-C83CD4325A32}';
+
+    // Relevante Keys für Auto-Subscribe
+    private array $GOE_KEYS = ['utc','nrg','car','amp','ama','psm','frc','alw'];
 
     protected function attachAndSubscribe(): bool
     {
-        $base = rtrim((string)$this->ReadPropertyString('BaseTopic'), '/');
-        if ($base === '') {
-            $this->LogMessage('BaseTopic ist leer.', KL_ERROR);
-            return false;
-        }
-
-        // Parent automatisch wählen, wenn noch keiner gesetzt ist
+        // Parent setzen/prüfen
         $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
         if ($parent <= 0) {
             $parent = $this->autoAttachSingleMqttGateway();
             if ($parent <= 0) {
-                $this->LogMessage('Kein MQTT-Gateway gefunden. Bitte Parent manuell wählen.', KL_WARNING);
+                $this->LogMessage('Kein MQTT-Gateway gefunden. Bitte Parent wählen.', KL_WARNING);
                 return false;
             }
         }
 
-        // Debug
+        // Debug Parent
         $pInst = @IPS_GetInstance($parent);
         if (is_array($pInst)) {
             $pMod = @IPS_GetModule($pInst['ModuleID']);
             $this->LogMessage('Parent: ' . (($pMod['ModuleName'] ?? '??')) . ' #' . $parent, KL_MESSAGE);
         }
 
-        // Wildcard-Subscribe auf alle Keys
+        $base = $this->currentBaseTopic();
+        if ($base === '') {
+            // Auto-Modus: nur die relevanten Keys hören
+            foreach ($this->GOE_KEYS as $k) {
+                $this->mqttSubscribe('go-eCharger/+/' . $k, 0);
+            }
+            return true;
+        }
+
+        // Fixer Stamm bekannt
         $this->mqttSubscribe($base . '/+', 0);
         return true;
     }
@@ -47,15 +52,12 @@ trait MqttClientTrait
 
         $frame = [
             'DataID'           => self::MQTT_TX,
-            'PacketType'       => 8, // SUBSCRIBE
-            // generische Felder
+            'PacketType'       => 8,
             'QualityOfService' => $qos,
             'Retain'           => false,
             'Topic'            => $topic,
             'Payload'          => '',
-            // subscribe-spezifisch
             'TopicFilter'      => $topic,
-            // legacy kompatibel
             'Topics'           => [[
                 'Topic'            => $topic,
                 'TopicFilter'      => $topic,
@@ -63,7 +65,6 @@ trait MqttClientTrait
                 'QualityOfService' => $qos
             ]]
         ];
-
         $this->SendDataToParent(json_encode($frame));
     }
 
@@ -74,10 +75,9 @@ trait MqttClientTrait
             $this->LogMessage('MQTT PUB SKIP: kein Parent', KL_WARNING);
             return;
         }
-
         $this->SendDataToParent(json_encode([
             'DataID'           => self::MQTT_TX,
-            'PacketType'       => 3, // PUBLISH
+            'PacketType'       => 3,
             'Topic'            => $topic,
             'Payload'          => $payload,
             'Retain'           => $retain,
@@ -86,17 +86,12 @@ trait MqttClientTrait
         ]));
     }
 
-    // Komfort: <BaseTopic>/<key>/set senden
     protected function sendSet(string $key, string $value, int $qos = 0, bool $retain = false): void
     {
-        $topic = rtrim((string)$this->ReadPropertyString('BaseTopic'), '/') . '/' . $key . '/set';
+        $topic = $this->bt($key) . '/set';
         $this->mqttPublish($topic, $value, $qos, $retain);
     }
 
-    /**
-     * Findet genau EIN MQTT-Gateway (Server ODER Client) und hängt die Instanz darunter.
-     * Rückgabe: Parent-ID oder 0.
-     */
     protected function autoAttachSingleMqttGateway(): int
     {
         $candidates = [];
@@ -106,9 +101,8 @@ trait MqttClientTrait
             if (!is_array($inst)) continue;
             $mod = @IPS_GetModule($inst['ModuleID'] ?? '');
             if (!is_array($mod)) continue;
-
-            $implemented = $mod['Implemented'] ?? [];
-            if (is_array($implemented) && in_array(self::MQTT_TX, $implemented, true)) {
+            $impl = $mod['Implemented'] ?? [];
+            if (is_array($impl) && in_array(self::MQTT_TX, $impl, true)) {
                 $candidates[] = $iid;
             }
         }
