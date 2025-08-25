@@ -12,25 +12,39 @@ trait MqttHandlersTrait
         $payload = (string)($data['Payload'] ?? '');
         if ($topic === '') return;
 
-        // 1) Falls BaseTopic noch unbekannt: aus Topic ableiten (go-eCharger/<id>)
-        $base = $this->currentBaseTopic();
-        if ($base === '') {
-            if (preg_match('#^(go-eCharger/[^/]+)/#', $topic, $m)) {
-                $detected = $m[1];
-                if ($detected !== '' && $this->ReadAttributeString('AutoBaseTopic') !== $detected) {
-                    $this->WriteAttributeString('AutoBaseTopic', $detected);
-                    $this->LogMessage('Auto-BaseTopic erkannt: ' . $detected, KL_MESSAGE);
+        $base   = $this->currentBaseTopic();
+        $filter = trim($this->ReadPropertyString('DeviceIDFilter'));
 
-                    // Optional: zusätzlich den konkreten Stamm abonnieren (breiter Subscribe bleibt bestehen)
-                    $this->mqttSubscribe($detected . '/+', 0);
+        // 1) BaseTopic unbekannt → aus Topic ableiten (go-eCharger/<id>)
+        if ($base === '') {
+            if (preg_match('#^(go-eCharger/([^/]+))/#', $topic, $m)) {
+                $detectedBase = $m[1];   // go-eCharger/<id>
+                $detectedId   = $m[2];   // <id>
+
+                // Falls Filter gesetzt: nur diese ID akzeptieren
+                if ($filter !== '' && $filter !== $detectedId) {
+                    return; // falsches Gerät für diese Instanz
                 }
+
+                if ($detectedBase !== '' && $this->ReadAttributeString('AutoBaseTopic') !== $detectedBase) {
+                    $this->WriteAttributeString('AutoBaseTopic', $detectedBase);
+                    $this->LogMessage('Auto-BaseTopic erkannt: ' . $detectedBase, KL_MESSAGE);
+
+                    // zusätzlich konkret subscriben
+                    $this->mqttSubscribe($detectedBase . '/+', 0);
+                }
+            } else {
+                return; // kein go-eCharger Topic
             }
+        } else {
+            // BaseTopic gesetzt → alles außerhalb ignorieren
+            if (strpos($topic, $base . '/') !== 0) return;
         }
 
         // 2) Key bestimmen
-        $base = $this->currentBaseTopic();
-        if ($base !== '' && strpos($topic, $base . '/') === 0) {
-            $key = substr($topic, strlen($base) + 1);
+        $baseNow = $this->currentBaseTopic();
+        if ($baseNow !== '' && strpos($topic, $baseNow . '/') === 0) {
+            $key = substr($topic, strlen($baseNow) + 1);
         } else {
             // Auto-Phase: letztes Segment als Key
             $parts = explode('/', $topic);

@@ -28,11 +28,14 @@ trait MqttClientTrait
             $this->LogMessage('Parent: ' . (($pMod['ModuleName'] ?? '??')) . ' #' . $parent, KL_MESSAGE);
         }
 
-        $base = $this->currentBaseTopic();
+        $base   = $this->currentBaseTopic();
+        $filter = trim($this->ReadPropertyString('DeviceIDFilter'));
+
         if ($base === '') {
-            // Auto-Modus: nur die relevanten Keys hören
+            // Auto-Modus: wenn Filter gesetzt → nur diese ID „lauschen“, sonst auf alle
+            $devicePart = ($filter !== '') ? $filter : '+';
             foreach ($this->GOE_KEYS as $k) {
-                $this->mqttSubscribe('go-eCharger/+/' . $k, 0);
+                $this->mqttSubscribe('go-eCharger/' . $devicePart . '/' . $k, 0);
             }
             return true;
         }

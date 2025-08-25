@@ -27,6 +27,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         // --- Properties & Auto-Modus ---
         $this->RegisterPropertyString('BaseTopic', '');            // leer => Auto
         $this->RegisterAttributeString('AutoBaseTopic', '');       // erkannter Stamm
+        $this->RegisterPropertyString('DeviceIDFilter', '');       // z.B. "285450", leer = kein Filter
 
         // Profile sicherstellen
         $this->ensureProfiles();
@@ -98,9 +99,10 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $auto  = trim($this->ReadAttributeString('AutoBaseTopic'));
         $state = $prop !== '' ? 'Fix (Property)' : ($auto !== '' ? 'Auto erkannt' : 'Unbekannt');
 
-        // Prefix des Moduls sicher ermitteln
-        $mod    = @IPS_GetModule(@IPS_GetInstance($this->InstanceID)['ModuleID']);
-        $prefix = is_array($mod) ? ($mod['Prefix'] ?? 'PVWM2') : 'PVWM2';
+        // Prefix aus module.json holen (Fallback: dein aktueller Prefix "GOEMQTT")
+        $inst   = @IPS_GetInstance($this->InstanceID);
+        $mod    = is_array($inst) ? @IPS_GetModule($inst['ModuleID']) : null;
+        $prefix = (is_array($mod) && !empty($mod['Prefix'])) ? $mod['Prefix'] : 'GOEMQTT';
 
         return json_encode([
             'elements' => [
@@ -115,13 +117,13 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 [
                     'type'    => 'Button',
                     'caption' => 'Erkannten BaseTopic übernehmen',
-                    'onClick' => $prefix . '_ApplyDetectedBaseTopic($id);',
+                    'onClick' => sprintf('%s_ApplyDetectedBaseTopic($id);', $prefix),
                     'enabled' => ($auto !== '' && $prop === '')
                 ],
                 [
                     'type'    => 'Button',
                     'caption' => 'Auto-Erkennung zurücksetzen',
-                    'onClick' => $prefix . '_ClearDetectedBaseTopic($id);',
+                    'onClick' => sprintf('%s_ClearDetectedBaseTopic($id);', $prefix),
                     'enabled' => ($auto !== '')
                 ]
             ]
@@ -134,10 +136,12 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $auto = trim($this->ReadAttributeString('AutoBaseTopic'));
         if ($auto === '') {
             $this->LogMessage('Kein AutoBaseTopic vorhanden.', KL_WARNING);
+            $this->ReloadForm();
             return;
         }
         IPS_SetProperty($this->InstanceID, 'BaseTopic', $auto);
         IPS_ApplyChanges($this->InstanceID);
+        $this->ReloadForm();
     }
 
     // Button: Auto-Erkennung löschen
@@ -145,6 +149,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     {
         $this->WriteAttributeString('AutoBaseTopic', '');
         IPS_ApplyChanges($this->InstanceID);
+        $this->ReloadForm();
     }
 
 }
