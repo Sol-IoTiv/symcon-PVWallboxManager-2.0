@@ -24,6 +24,9 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         // Properties
 //        $this->RegisterPropertyString('BaseTopic', 'go-eCharger/285450');
         
+        // Property: Debug an/aus
+        $this->RegisterPropertyBoolean('DebugLogging', false);
+
         // --- Properties & Auto-Modus ---
         $this->RegisterPropertyString('BaseTopic', '');            // leer => Auto
         $this->RegisterAttributeString('AutoBaseTopic', '');       // erkannter Stamm
@@ -46,12 +49,11 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterVariableInteger('Phasenmodus', 'Phasenmodus',       'GoE.PhaseMode',  60);
         $this->EnableAction('Phasenmodus');
 
-//        $this->RegisterVariableString('LastSeenUTC',  'Zuletzt gesehen (UTC)', '',           70);
         $this->RegisterVariableInteger('Uhrzeit',     'Uhrzeit',            '~UnixTimestamp', 70);
 
 
         // Debug / Rohwerte
-        $this->RegisterVariableString('NRG_RAW',      'NRG (roh)',         '~TextBox',       90);
+//        $this->RegisterVariableString('NRG_RAW',      'NRG (roh)',         '~TextBox',       90);
 
         // (Für späteres WebFront-Preview)
         // $this->RegisterVariableString('Preview', 'Wallbox-Preview', '~HTMLBox', 100);
@@ -112,6 +114,9 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 ['type' => 'RowLayout', 'items' => [
                     ['type' => 'ValidationTextBox', 'name' => 'BaseTopic', 'caption' => 'BaseTopic (optional, leer = Auto)']
                 ]],
+                // Debug-Schalter:
+                ['type' => 'CheckBox', 'name' => 'DebugLogging', 'caption' => '🐞 Debug-Logging aktivieren (NRG roh ins IPS-Log & Instanz-Debug)'],
+
                 ['type' => 'Label', 'caption' => 'Erkannt: ' . ($auto !== '' ? $auto : '—')],
                 ['type' => 'Label', 'caption' => 'Status: ' . $state]
             ],

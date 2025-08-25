@@ -32,4 +32,13 @@ trait Helpers
         $base = $this->currentBaseTopic();
         return ($base === '') ? $key : ($base . '/' . $key);
     }
+
+    protected function logDbg(string $msg): void
+    {
+        if ($this->ReadPropertyBoolean('DebugLogging')) {
+            IPS_LogMessage('PVWM2', $msg);
+        }
+    }
+
+
 }

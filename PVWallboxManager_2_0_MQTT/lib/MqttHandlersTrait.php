@@ -99,9 +99,20 @@ trait MqttHandlersTrait
             }
 
             case 'nrg':
-                $this->SetValueSafe('NRG_RAW', $payload);
+            {
+                // 1) Optional ins Log schreiben, aber nur wenn Debug aktiv
+                if ($this->ReadPropertyBoolean('DebugLogging')) {
+                    // ins Instanz-Debug:
+                    $this->SendDebug('MQTT nrg (raw)', $payload, 0);
+
+                    // ins globale IPS-Log:
+                    $this->logDbg('nrg raw: ' . $payload);
+                }
+
+                // 2) PTotal extrahieren & speichern (keine Roh-Variable!)
                 $this->parseAndStoreNRG($payload);
                 break;
+            }
 
             default:
                 // weitere Topics später ergänzen
