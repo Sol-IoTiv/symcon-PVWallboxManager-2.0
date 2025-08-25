@@ -151,7 +151,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         }
 
         // --- LOOP-Timer Skript aktualisieren + deaktivieren ---
-        $wantedScript = $this->modulePrefix()."_Loop($_IPS['TARGET']);";
+        $wantedScript = $this->modulePrefix() . '_Loop($_IPS[\'TARGET\']);';
         $eid = @IPS_GetObjectIDByIdent('LOOP', $this->InstanceID);
         if ($eid) {
             @IPS_SetEventScript($eid, $wantedScript);
