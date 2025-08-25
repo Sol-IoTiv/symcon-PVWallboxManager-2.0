@@ -109,14 +109,13 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     {
         parent::ApplyChanges();
 
-        // Profil GoE.Amp an Min/Max anpassen
+        // --- GoE.Amp-Profil an Properties anpassen ---
         [$minA, $maxA] = $this->ampRange();
         if (IPS_VariableProfileExists('GoE.Amp')) {
             IPS_SetVariableProfileValues('GoE.Amp', $minA, $maxA, 1);
             IPS_SetVariableProfileText('GoE.Amp', '', ' A');
         }
-        $vidAmp = @$this->GetIDForIdent('Ampere_A');
-        if ($vidAmp) {
+        if ($vidAmp = @$this->GetIDForIdent('Ampere_A')) {
             $cur = (int)@GetValue($vidAmp);
             $clamped = min($maxA, max($minA, $cur));
             if ($cur !== $clamped) { @SetValue($vidAmp, $clamped); }
@@ -124,34 +123,42 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         // --- MQTT attach + Subscribe ---
         if (!$this->attachAndSubscribe()) {
-            // Timer aus, Status Fehler
+            // Watchdog aus, Status Fehler
             $this->SetTimerInterval('LOOP', 0);
             $this->SetStatus(IS_EBASE + 2);
             return;
         }
 
-        // Auf Änderungen am Haus-Gesamt und an der eigenen WB-Leistung reagieren
+        // --- alte Referenzen/Messages aufräumen ---
+        $refs = @IPS_GetInstance($this->InstanceID)['References'] ?? [];
+        if (is_array($refs)) {
+            foreach ($refs as $rid) {
+                @ $this->UnregisterMessage($rid, VM_UPDATE);
+                @ $this->UnregisterReference($rid);
+            }
+        }
+
+        // --- auf Änderungen reagieren: Haus-Gesamt (Modbus) & eigene WB-Leistung ---
         $houseId = (int)$this->ReadPropertyInteger('VarHouse_ID');
         if ($houseId > 0 && @IPS_VariableExists($houseId)) {
-            @$this->RegisterMessage($houseId, VM_UPDATE);
-            @$this->RegisterReference($houseId);
+            @ $this->RegisterMessage($houseId, VM_UPDATE);
+            @ $this->RegisterReference($houseId);
         }
-        $wbVid = @$this->GetIDForIdent('Leistung_W');
-        if ($wbVid) {
-            @$this->RegisterMessage($wbVid, VM_UPDATE);
+        if ($wbVid = @$this->GetIDForIdent('Leistung_W')) {
+            @ $this->RegisterMessage($wbVid, VM_UPDATE);
+            // keine Reference nötig – eigene Variable
         }
 
-        // Timer sicher existieren lassen, aber DEaktiviert (0 ms)
-        $eid = @IPS_GetObjectIDByIdent('LOOP', $this->InstanceID);
+        // --- LOOP-Timer sicher vorhanden, aber deaktiviert (kein Polling) ---
         $wantedScript = $this->modulePrefix()."_Loop(\$_IPS['TARGET']);";
-        if (!$eid) {
+        if (!@IPS_GetObjectIDByIdent('LOOP', $this->InstanceID)) {
             $this->RegisterTimer('LOOP', 0, $wantedScript);
         } else {
-            @IPS_SetEventScript($eid, $wantedScript);
+            @IPS_SetEventScript(@IPS_GetObjectIDByIdent('LOOP', $this->InstanceID), $wantedScript);
+            $this->SetTimerInterval('LOOP', 0);
         }
-        $this->SetTimerInterval('LOOP', 0); // watchdog aus
 
-        // Initial: HausNet berechnen + Regel einmal ausführen
+        // --- Initial: HausNet berechnen & einmal regeln ---
         $this->updateHouseNetFromInputs();
         $this->Loop();
 
@@ -166,8 +173,9 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $wbVid   = @$this->GetIDForIdent('Leistung_W');
 
         if ($SenderID === $houseId || $SenderID === $wbVid) {
-            $this->updateHouseNetFromInputs(); // HausNet setzen (mit WB>Schwelle)
-            $this->Loop();                     // sofort regeln
+            $this->dbgLog('HN-Trigger', "VM_UPDATE von {$SenderID}");
+            $this->updateHouseNetFromInputs();
+            // optional: $this->Loop();  // wenn du direkt danach regeln willst
         }
     }
 
@@ -491,4 +499,19 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         IPS_ApplyChanges($this->InstanceID);
         $this->ReloadForm();
     }
+
+    private function updateHouseNetFromInputs(): void
+    {
+        $houseTotal = $this->readVarWUnit('VarHouse_ID', 'VarHouse_Unit'); // W gesamt (inkl. WB)
+        $wb         = max(0, $this->getWBPowerW());                       // W (aus Leistung_W)
+        $minWB      = max(0, (int)$this->ReadPropertyInteger('WBSubtractMinW'));
+
+        // Nur abziehen, wenn WB > Schwelle – sonst HausNet = HausGesamt
+        $houseNet = ($wb > $minWB) ? max(0, (int)round($houseTotal - $wb))
+                                : (int)round($houseTotal);
+
+        $this->SetValueSafe('HouseNet_W', $houseNet);
+        $this->dbgLog('HausNet-Recalc', "HausGes={$houseTotal}W, WB={$wb}W (>{$minWB}W? ".(($wb>$minWB)?'ja':'nein').") -> HausNet={$houseNet}W");
+    }
+
 }
