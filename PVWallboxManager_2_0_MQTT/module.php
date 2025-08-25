@@ -54,8 +54,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterPropertyInteger('NominalVolt', 230);   // pro Phase
         $this->RegisterPropertyInteger('MinHoldAfterPhaseMs', 30000); // Sperrzeit nach psm-Wechsel
         $this->RegisterPropertyInteger('MinPublishGapMs', 2000);      // Mindestabstand ama/set
-//        $this->RegisterPropertyBoolean('CtrlEnabled', true);
-//        $this->RegisterPropertyInteger('CtrlIntervalMs', 1000);       // Loop-Intervall
         $this->RegisterPropertyInteger('WBSubtractMinW', 100); 
 
         //// Start-Reserve in Watt (Sicherheitsmarge über MinAmp)
@@ -162,7 +160,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         }
 
         // --- Initial: HausNet berechnen & einmal regeln ---
-        $this->updateHouseNetFromInputs();
+        $this->RecalcHausverbrauchAbzWallbox(true);
         $this->Loop();
 
         $this->SetStatus(IS_ACTIVE);
@@ -177,7 +175,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         if ($SenderID === $houseId || $SenderID === $wbVid) {
             $this->dbgLog('HN-Trigger', "VM_UPDATE von {$SenderID}");
-            $this->updateHouseNetFromInputs();
+            $this->RecalcHausverbrauchAbzWallbox(true);
             // optional: $this->Loop();  // wenn du direkt danach regeln willst
         }
     }
@@ -557,16 +555,46 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
     private function updateHouseNetFromInputs(): void
     {
-        $houseTotal = $this->readVarWUnit('VarHouse_ID', 'VarHouse_Unit'); // W gesamt (inkl. WB)
-        $wb         = max(0, $this->getWBPowerW());                       // W (aus Leistung_W)
-        $minWB      = max(0, (int)$this->ReadPropertyInteger('WBSubtractMinW'));
+        // Bewusst ohne eigenes Log – zentrale Logik sitzt jetzt in RecalcHausverbrauchAbzWallbox()
+        $this->RecalcHausverbrauchAbzWallbox(false);
+    }
 
-        // Nur abziehen, wenn WB > Schwelle – sonst HausNet = HausGesamt
-        $houseNet = ($wb > $minWB) ? max(0, (int)round($houseTotal - $wb))
-                                : (int)round($houseTotal);
+    /**
+     * Neu (2.0): Rechnet "Hausverbrauch abzüglich WB" mit Schwelle
+     * und schreibt HouseNet_W (und optional eine Kompatibilitäts-Variable).
+     * Batterie wird hier bewusst NICHT berücksichtigt.
+     */
+    public function RecalcHausverbrauchAbzWallbox(bool $withLog = true): void
+    {
+        // Eingänge: Haus gesamt (inkl. WB), WB-Leistung (W)
+        $houseTotal = $this->readVarWUnit('VarHouse_ID', 'VarHouse_Unit');
+        $wb         = max(0, $this->getWBPowerW());
+        $minWB      = max(0, (int)$this->ReadPropertyInteger('WBSubtractMinW')); // z.B. 100 W
 
+        // WB nur abziehen, wenn über Schwelle
+        $wbEff    = ($wb > $minWB) ? $wb : 0;
+        $houseNet = max(0, (int)round($houseTotal - $wbEff));
+
+        // Schreiben
         $this->SetValueSafe('HouseNet_W', $houseNet);
-        $this->dbgLog('HausNet-Recalc', "HausGes={$houseTotal}W, WB={$wb}W (>{$minWB}W? ".(($wb>$minWB)?'ja':'nein').") -> HausNet={$houseNet}W");
+
+        // (Optional) Kompatibilitäts-Variable, falls es sie noch gibt
+        if ($vid = @$this->GetIDForIdent('Hausverbrauch_abz_Wallbox')) {
+            @SetValue($vid, $houseNet);
+        }
+
+        // Log
+        if ($withLog) {
+            $fmt = static function (int $w): string { return number_format($w, 0, ',', '.'); };
+            $this->dbgLog('HausNet', sprintf(
+                'HausGesamt=%s W | WB=%s W %s (Schwelle=%s W) → HausNet=%s W',
+                $fmt((int)round($houseTotal)),
+                $fmt((int)round($wb)),
+                ($wb > $minWB) ? 'abgezogen' : '≤ Schwelle, nicht abgezogen',
+                $fmt($minWB),
+                $fmt($houseNet)
+            ));
+        }
     }
 
 }
