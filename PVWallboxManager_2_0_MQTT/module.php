@@ -227,6 +227,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $mode  = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV, 1=Manuell, 2=Aus
         $nowMs = (int)(microtime(true) * 1000);
         $lastFR = $this->lastFrcChangeMs();
+        $lastFR = $this->_lastFrcChangeMs();
+
 
 
         // AUS: Force-Off erzwingen und raus
@@ -405,58 +407,52 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         if ($charging && $stopOk && !$onHold) {
             $this->sendSet('frc', '1');
             $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
-            // Zähler resetten
+            // Hysterese-Zähler zurücksetzen → kein direktes Gegenereignis
             $this->WriteAttributeInteger('CntStart', 0);
             $this->WriteAttributeInteger('CntStop',  0);
             $this->dbgLog('Ladung', 'Stop (Stop-Hysterese erreicht)');
             return;
-}
+        }
 
         // START
         if (!$charging && $connected && $startOk && !$offHold && $surplus >= $minP) {
             $this->sendSet('frc', '2');
             $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
-            // Zähler resetten
+            // Hysterese-Zähler zurücksetzen → kein direktes Gegenereignis
             $this->WriteAttributeInteger('CntStart', 0);
             $this->WriteAttributeInteger('CntStop',  0);
             $this->dbgLog('Ladung', 'Start (Hysterese & Reserve erfüllt, pm=' . ($ph===3?'3-ph':'1-ph') . ')');
-            // kein return: wir dürfen im Anschluss Ampere setzen
+            // kein return: gleich sanft Ampere nachziehen
         }
 
-        // --- Sanftes Ampere-Ramping (Rate-Limit + Publish-Gap) ---
+        // --- Sanftes Ampere-Update: 1A-Schritte, mind. 3–5s Abstand ---
         $lastPub   = (int)$this->ReadAttributeInteger('LastPublishMs');
-        $gapMs     = (int)$this->ReadPropertyInteger('MinPublishGapMs');
-        $lastASet  = (int)$this->ReadAttributeInteger('LastAmpSet');
+        $gapMs     = (int)$this->ReadPropertyInteger('MinPublishGapMs'); // z.B. 2000
+        $lastA     = (int)$this->ReadAttributeInteger('LastAmpSet');
         $vidA      = @$this->GetIDForIdent('Ampere_A');
-        $curA      = $vidA ? (int)@GetValue($vidA) : $lastASet;
+        $curA      = $vidA ? (int)@GetValue($vidA) : $lastA;
 
-        // Zielampere aus GLATTEM Überschuss, konservativ mit halber Reserve
+        // Zielampere (wie bisher) – auf Basis des ROH-Überschusses
         $effSurplus = max(0, $surplus - (int)floor($resW / 2));
-        $targetA    = (int)floor($effSurplus / ($U * $ph));
-        $targetA    = max($minA, min($maxA, $targetA));
+        $neededA    = (int)floor($effSurplus / ($U * $ph));
+        $setA       = max($minA, min($maxA, $neededA));
 
-        // Ramp-Parameter (mit Defaults, falls Property fehlt)
-        $rampStep = max(1, (int)$this->ReadPropertyInteger('RampStepA') ?: 1);
-        $rampHold = max(500, (int)$this->ReadPropertyInteger('RampHoldMs') ?: 3000);
-        $lastAmpChange = (int)$this->ReadAttributeInteger('LastAmpChangeMs');
+        // Kleinständerung erst ab 2A Differenz (+ Rate-Limit via Publish-Gap *1.5)
+        $minDeltaA  = 2;
+        $minHoldMs  = (int)max(3000, floor($gapMs * 1.5));
+        $sincePub   = $nowMs - $lastPub;
 
-        if ($frcCur === 2) { // nur wenn Freigabe aktiv
-            $canPublish = (($nowMs - $lastPub) >= $gapMs);
-            $canRamp    = (($nowMs - $lastAmpChange) >= $rampHold);
+        if ($frcCur === 2 && $sincePub >= $minHoldMs && abs($setA - $curA) >= $minDeltaA) {
+            // Nur 1A pro Schritt – verhindert Sprünge
+            $nextA = ($setA > $curA) ? ($curA + 1) : ($curA - 1);
+            $nextA = max($minA, min($maxA, $nextA));
 
-            if ($canPublish && $canRamp && $targetA !== $curA) {
-                $nextA = $curA;
-                if      ($targetA > $curA) $nextA = min($curA + $rampStep, $targetA);
-                else if ($targetA < $curA) $nextA = max($curA - $rampStep, $targetA);
-
-                if ($nextA !== $curA) {
-                    $this->sendSet('ama', (string)$nextA);
-                    if ($vidA) @SetValue($vidA, $nextA);
-                    $this->WriteAttributeInteger('LastAmpSet', $nextA);
-                    $this->WriteAttributeInteger('LastPublishMs', $nowMs);
-                    $this->WriteAttributeInteger('LastAmpChangeMs', $nowMs);
-                    $this->dbgChanged('Ampere', $curA.' A', $nextA.' A');
-                }
+            if ($nextA !== $curA) {
+                $this->sendSet('ama', (string)$nextA);
+                if ($vidA) @SetValue($vidA, $nextA);
+                $this->WriteAttributeInteger('LastAmpSet',    $nextA);
+                $this->WriteAttributeInteger('LastPublishMs', $nowMs);
+                $this->dbgChanged('Ampere', $curA.' A', $nextA.' A');
             }
         }
     }
@@ -535,5 +531,20 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         }
         return max($attr, $varMs);
     }
+
+    private function _lastFrcChangeMs(): int
+    {
+        $attr = (int)$this->ReadAttributeInteger('LastFrcChangeMs');
+        $vid  = @$this->GetIDForIdent('FRC');
+        if ($vid && @IPS_VariableExists($vid)) {
+            $vi = @IPS_GetVariable($vid);
+            if (is_array($vi) && isset($vi['VariableUpdated'])) {
+                $varMs = (int)$vi['VariableUpdated'] * 1000; // s → ms
+                return max($attr, $varMs);
+            }
+        }
+        return $attr;
+    }
+
 
 }
