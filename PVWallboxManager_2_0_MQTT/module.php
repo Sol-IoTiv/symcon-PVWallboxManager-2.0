@@ -57,6 +57,16 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterPropertyBoolean('CtrlEnabled', true);
         $this->RegisterPropertyInteger('CtrlIntervalMs', 1000);       // Loop-Intervall
 
+        //// Start-Reserve in Watt (Sicherheitsmarge über MinAmp)
+        $this->RegisterPropertyInteger('StartReserveW', 200); // z.B. 200W
+
+        //// Mindest-Laufzeiten für FRC (Start/Stop)
+        $this->RegisterPropertyInteger('MinOnTimeMs',  60000); // 60s nach Start nicht wieder stoppen
+        $this->RegisterPropertyInteger('MinOffTimeMs', 15000); // 15s nach Stop nicht gleich wieder starten
+
+        //// Zeitpunkt letzte FRC-Änderung
+        $this->RegisterAttributeInteger('LastFrcChangeMs', 0);
+
         // Profile sicherstellen
         $this->ensureProfiles();
 
@@ -249,31 +259,54 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             return;
         }
 
-        // 5) Ampere-Setpoint
-        $U      = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
-        $ph     = ($pm === 2) ? 3 : 1;
-        $minA   = (int)$this->ReadPropertyInteger('MinAmp');
-        $maxA   = (int)$this->ReadPropertyInteger('MaxAmp');
-        $neededA = (int)ceil($surplus / ($U * $ph));
-        $setA = max($minA, min($maxA, $neededA));
+        // -------------------------
+        // 5) Start/Stop + Phasen + Ampere
+        // -------------------------
 
-        // Start/Stop per FRC
-        if ($stopOk && $car >= 2) {
-            $this->sendSet('frc', '1');
+        $U       = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
+        $ph      = ((int)@GetValue(@$this->GetIDForIdent('Phasenmodus')) === 2) ? 3 : 1;
+        $minA    = (int)$this->ReadPropertyInteger('MinAmp');
+        $maxA    = (int)$this->ReadPropertyInteger('MaxAmp');
+        $resW    = (int)$this->ReadPropertyInteger('StartReserveW'); // Reserve über MinAmp
+
+        $minPowerW = $minA * $U * $ph + $resW;     // so viel Überschuss brauchen wir mindestens zum Start
+
+        $nowMs   = (int)(microtime(true) * 1000);
+        $lastFR  = (int)$this->ReadAttributeInteger('LastFrcChangeMs');
+        $onHold  = ($nowMs - $lastFR) < (int)$this->ReadPropertyInteger('MinOnTimeMs');
+        $offHold = ($nowMs - $lastFR) < (int)$this->ReadPropertyInteger('MinOffTimeMs');
+
+        $charging = $this->isChargingActive();
+
+        // --- STOP: nur wenn wir laden, Stop-Hysterese erfüllt UND Mindest-Einzeit vorbei ---
+        if ($charging && $stopOk && !$onHold) {
+            $this->sendSet('frc', '1'); // Force-Off
+            $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
             $this->dbgLog('Ladung', 'Stop (Stop-Hysterese erreicht)');
-            return;
-        }
-        if ($startOk && $car >= 3) {
-            $this->sendSet('frc', '2');
-            $this->dbgLog('Ladung', 'Start (Start-Hysterese erreicht)');
+            return; // in diesem Takt nichts weiter schicken
         }
 
-        // Rate-Limit
+        // --- START: nur wenn NICHT laden, Start-Hysterese erfüllt, Mindest-Auszeit vorbei UND genug Reserve für MinAmp ---
+        if (!$charging && $startOk && !$offHold && $surplus >= $minPowerW) {
+            $this->sendSet('frc', '2'); // Force-On
+            $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
+            $this->dbgLog('Ladung', 'Start (Start-Hysterese & Reserve erfüllt)');
+            // nicht "return": wir können gleich den ersten Ampere-Setpoint mitschicken
+        }
+
+        // --- Ampere-Setpoint: vorsichtig nach unten/oben anpassen ---
         $lastPub = (int)$this->ReadAttributeInteger('LastPublishMs');
         $gapMs   = (int)$this->ReadPropertyInteger('MinPublishGapMs');
         $lastA   = (int)$this->ReadAttributeInteger('LastAmpSet');
 
-        if ($setA !== $lastA && ($nowMs - $lastPub) >= $gapMs) {
+        // etwas Reserve bei der Berechnung weglassen, damit wir nicht sofort ins Negative rutschen
+        $effSurplus = max(0, $surplus - (int)floor($resW / 2));
+
+        // nicht "ceil", sondern "floor" – konservativer
+        $neededA = (int)floor($effSurplus / ($U * $ph));
+        $setA    = max($minA, min($maxA, $neededA));
+
+        if (($nowMs - $lastPub) >= $gapMs && $setA !== $lastA) {
             $this->sendSet('ama', (string)$setA);
             $this->WriteAttributeInteger('LastAmpSet', $setA);
             $this->WriteAttributeInteger('LastPublishMs', $nowMs);
