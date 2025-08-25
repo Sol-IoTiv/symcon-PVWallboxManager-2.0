@@ -101,64 +101,61 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     {
         $prop  = trim($this->ReadPropertyString('BaseTopic'));
         $auto  = trim($this->ReadAttributeString('AutoBaseTopic'));
-        $state = $prop !== '' ? 'Fix (Property)' : ($auto !== '' ? 'Auto erkannt' : 'Unbekannt');
+        $state = ($prop !== '') ? 'Fix (Property)' : (($auto !== '') ? 'Auto erkannt' : 'Unbekannt');
 
-        // Prefix dynamisch ermitteln (für Buttons)
+        // Prefix dynamisch aus module.json (Fallback: GOEMQTT)
         $inst   = @IPS_GetInstance($this->InstanceID);
         $mod    = is_array($inst) ? @IPS_GetModule($inst['ModuleID']) : null;
         $prefix = (is_array($mod) && !empty($mod['Prefix'])) ? $mod['Prefix'] : 'GOEMQTT';
 
-        $elements = [];
+        return json_encode([
+            'elements' => [
 
-        // --- Abschnitt: MQTT / Geräte-Zuordnung ---
-        $elements[] = [
-            'type'    => 'GroupBox',
-            'caption' => 'MQTT / Geräte-Zuordnung',
-            'items'   => [
-                ['type' => 'Label', 'caption' => 'BaseTopic (leer = automatische Erkennung)'],
-                ['type' => 'ValidationTextBox', 'name' => 'BaseTopic', 'caption' => 'MQTT BaseTopic (optional)'],
-
-                ['type' => 'Label', 'caption' => 'Erkannt: ' . ($auto !== '' ? $auto : '—')],
-                ['type' => 'Label', 'caption' => 'Status: ' . $state],
-
-                // Buttons in einer Zeile
+                // --- Abschnitt: MQTT / Geräte-Zuordnung ---
                 [
-                    'type'  => 'RowLayout',
-                    'items' => [
+                    'type'    => 'ExpansionPanel',
+                    'caption' => 'MQTT / Geräte-Zuordnung',
+                    'items'   => [
+                        ['type' => 'Label', 'caption' => 'BaseTopic (leer = automatische Erkennung)'],
+                        ['type' => 'ValidationTextBox', 'name' => 'BaseTopic', 'caption' => 'MQTT BaseTopic (optional)'],
+
+                        ['type' => 'Label', 'caption' => 'Erkannt: ' . ($auto !== '' ? $auto : '—')],
+                        ['type' => 'Label', 'caption' => 'Status: ' . $state],
+
                         [
-                            'type'    => 'Button',
-                            'caption' => 'Erkannten BaseTopic übernehmen',
-                            'onClick' => sprintf('%s_ApplyDetectedBaseTopic($id);', $prefix),
-                            'enabled' => ($auto !== '' && $prop === '')
-                        ],
-                        [
-                            'type'    => 'Button',
-                            'caption' => 'Auto-Erkennung zurücksetzen',
-                            'onClick' => sprintf('%s_ClearDetectedBaseTopic($id);', $prefix),
-                            'enabled' => ($auto !== '')
+                            'type'  => 'RowLayout',
+                            'items' => [
+                                [
+                                    'type'    => 'Button',
+                                    'caption' => 'Erkannten BaseTopic übernehmen',
+                                    'onClick' => sprintf('%s_ApplyDetectedBaseTopic($id);', $prefix),
+                                    'enabled' => ($auto !== '' && $prop === '')
+                                ],
+                                [
+                                    'type'    => 'Button',
+                                    'caption' => 'Auto-Erkennung zurücksetzen',
+                                    'onClick' => sprintf('%s_ClearDetectedBaseTopic($id);', $prefix),
+                                    'enabled' => ($auto !== '')
+                                ]
+                            ]
                         ]
+                    ]
+                ],
+
+                // --- Abschnitt: Debug & Diagnose ---
+                [
+                    'type'    => 'ExpansionPanel',
+                    'caption' => 'Debug & Diagnose',
+                    'items'   => [
+                        [
+                            'type'    => 'CheckBox',
+                            'name'    => 'DebugLogging',
+                            'caption' => '🐞 Debug-Logging aktivieren (NRG roh & Zeit-Updates ins IPS-Log + Instanz-Debug)'
+                        ],
+                        ['type' => 'Label', 'caption' => 'Hinweis: nrg kommt oft sekündlich – Debug nur kurzzeitig aktivieren.']
                     ]
                 ]
             ]
-        ];
-
-        // --- Abschnitt: Debug & Diagnose ---
-        $elements[] = [
-            'type'    => 'GroupBox',
-            'caption' => 'Debug & Diagnose',
-            'items'   => [
-                [
-                    'type'    => 'CheckBox',
-                    'name'    => 'DebugLogging',
-                    'caption' => '🐞 Debug-Logging aktivieren (NRG roh & Zeit-Updates ins IPS-Log + Instanz-Debug)'
-                ],
-                ['type' => 'Label', 'caption' => 'Hinweis: nrg kommt oft sekündlich – Debug nur kurzzeitig aktivieren.']
-            ]
-        ];
-
-        return json_encode([
-            'elements' => $elements,
-            'actions'  => [] // aktuell keine extra Actions
         ]);
     }
 
