@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-class GoEMQTTMirror extends IPSModule
+class PVWallboxManager2.0[MQTT] extends IPSModule
 {
     // MQTT DataIDs (Symcon 8.1)
     private const MQTT_TX = '{043EA491-0325-4ADD-8FC2-A30C8EEB4D3F}'; // Child -> Parent (SUB/PUB)
