@@ -95,7 +95,6 @@ trait MqttHandlersTrait
 
                 if ($oldTs !== $ts) {
                     $this->SetValueSafe('Uhrzeit', $ts);
-//                    $this->dbgLog('UTC→Uhrzeit', date('Y-m-d H:i:s T', $ts) . " (ts=$ts)");
                     $this->dbgLog('MQTT nrg (raw)', $payload);
                     $this->parseAndStoreNRG($payload);
                 }
@@ -104,10 +103,7 @@ trait MqttHandlersTrait
 
             case 'nrg':
             {
-                // Nur Instanz-Debug, KEIN IPS_LogMessage
-                if ($this->ReadPropertyBoolean('DebugLogging')) {
-                    $this->SendDebug('MQTT nrg (raw)', $payload, 0);
-                }
+                $this->dbgLog('MQTT nrg (raw)', $payload);
                 $this->parseAndStoreNRG($payload);
                 break;
             }
