@@ -99,6 +99,14 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterAttributeInteger('LastPhaseMode', 0);     // 1/2
         $this->RegisterAttributeInteger('LastPhaseSwitchMs', 0);
 
+
+        // --- Smoothing & Ramping ---
+        $this->RegisterPropertyInteger('SmoothAlphaPermille', 300);  // 0..1000 → 0.3 = smooth, 0 = aus
+        $this->RegisterPropertyInteger('RampHoldMs', 3000);          // min. Abstand zw. Amp-Schritten
+        $this->RegisterPropertyInteger('RampStepA', 1);              // 1 A pro Schritt
+        $this->RegisterAttributeInteger('SmoothSurplusW', 0);
+        smoothSurplus$this->RegisterAttributeInteger('LastAmpChangeMs', 0)
+
         // --- Timer für Control-Loop ---
         $this->RegisterTimer('LOOP', 0, $this->modulePrefix()."_Loop(\$_IPS['TARGET']);");
 

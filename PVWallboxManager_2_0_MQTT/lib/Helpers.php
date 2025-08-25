@@ -125,4 +125,50 @@ trait Helpers
     protected function minAmp(): int { return $this->ampRange()[0]; }
     protected function maxAmp(): int { return $this->ampRange()[1]; }
 
+    private function smoothSurplus(int $rawW): int
+    {
+        $alphaPermille = (int)$this->ReadPropertyInteger('SmoothAlphaPermille');
+        $alphaPermille = max(0, min(1000, $alphaPermille));
+        if ($alphaPermille === 0) {
+            $this->WriteAttributeInteger('SmoothSurplusW', $rawW);
+            return $rawW; // glätten aus
+        }
+        $alpha = $alphaPermille / 1000.0;
+
+        $prev = (int)$this->ReadAttributeInteger('SmoothSurplusW');
+        $sm   = (int)round($alpha * $rawW + (1.0 - $alpha) * $prev);
+
+        $this->WriteAttributeInteger('SmoothSurplusW', $sm);
+        return $sm;
+    }
+
+    private function canToggleFRC(int $targetFRC): bool
+    {
+        $nowMs  = (int)(microtime(true) * 1000);
+        $lastMs = (int)$this->ReadAttributeInteger('LastFrcChangeMs'); // du schreibst das bereits bei sendSet('frc',..)
+        $minOn  = (int)$this->ReadPropertyInteger('MinOnTimeMs');   // z.B. 60000
+        $minOff = (int)$this->ReadPropertyInteger('MinOffTimeMs');  // z.B. 15000
+        $elapsed = $nowMs - $lastMs;
+
+        // aktuellen erzwungenen Zustand lesen (oder notfalls 0=neutral)
+        $frcCur = (int)@GetValue(@$this->GetIDForIdent('FRC')); // falls du FRC als Var führst
+        $frcCur = ($frcCur >= 0 && $frcCur <= 2) ? $frcCur : 0;
+
+        // gleiche Zielrichtung? kein Toggle nötig
+        if ($targetFRC === $frcCur) {
+            return false;
+        }
+
+        // Start→Stop erst nach MinOnTime
+        if ($frcCur === 2 && $targetFRC === 1 && $elapsed < $minOn) {
+            return false;
+        }
+        // Stop/Neutral→Start erst nach MinOffTime
+        if ($frcCur !== 2 && $targetFRC === 2 && $elapsed < $minOff) {
+            return false;
+        }
+        return true;
+    }
+
+
 }
