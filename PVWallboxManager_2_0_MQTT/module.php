@@ -46,7 +46,9 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterVariableInteger('Phasenmodus', 'Phasenmodus',       'GoE.PhaseMode',  60);
         $this->EnableAction('Phasenmodus');
 
-        $this->RegisterVariableString('LastSeenUTC',  'Zuletzt gesehen (UTC)', '',           70);
+//        $this->RegisterVariableString('LastSeenUTC',  'Zuletzt gesehen (UTC)', '',           70);
+        $this->RegisterVariableInteger('Uhrzeit',     'Uhrzeit',            '~UnixTimestamp', 70);
+
 
         // Debug / Rohwerte
         $this->RegisterVariableString('NRG_RAW',      'NRG (roh)',         '~TextBox',       90);

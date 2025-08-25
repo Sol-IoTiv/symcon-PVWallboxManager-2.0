@@ -73,8 +73,30 @@ trait MqttHandlersTrait
                 break;
 
             case 'utc':
-                $this->SetValueSafe('LastSeenUTC', trim($payload, "\" \t\n\r\0\x0B"));
+            {
+                $raw = trim($payload, "\" \t\n\r\0\x0B"); // z.B. 2025-08-11T11:55:42.988
+
+                // robust gegen Millisekunden/ohne Z
+                $ts = 0;
+                try {
+                    $dt = new DateTime($raw, new DateTimeZone('UTC'));
+                    $ts = $dt->getTimestamp();
+                } catch (Throwable $e) {
+                    // Fallback: Millisekunden entfernen und erneut versuchen
+                    $clean = preg_replace('/\.\d+/', '', $raw);
+                    try {
+                        $dt = new DateTime($clean, new DateTimeZone('UTC'));
+                        $ts = $dt->getTimestamp();
+                    } catch (Throwable $e2) {
+                        // Letzter Fallback: ignorieren
+                        break;
+                    }
+                }
+
+                // → Integer mit Profil ~UnixTimestamp => WebFront zeigt lokale Zeit
+                $this->SetValueSafe('Uhrzeit', $ts);
                 break;
+            }
 
             case 'nrg':
                 $this->SetValueSafe('NRG_RAW', $payload);
