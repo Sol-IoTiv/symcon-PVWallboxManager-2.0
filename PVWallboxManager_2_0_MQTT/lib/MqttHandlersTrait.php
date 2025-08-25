@@ -95,10 +95,9 @@ trait MqttHandlersTrait
 
                 if ($oldTs !== $ts) {
                     $this->SetValueSafe('Uhrzeit', $ts);
-                    // Nur Instanz-Debug, KEIN IPS_LogMessage (VariableManager loggt Änderung ohnehin)
-                    if ($this->ReadPropertyBoolean('DebugLogging')) {
-                        $this->SendDebug('UTC→Uhrzeit', date('Y-m-d H:i:s T', $ts) . " (ts=$ts)", 0);
-                    }
+//                    $this->dbgLog('UTC→Uhrzeit', date('Y-m-d H:i:s T', $ts) . " (ts=$ts)");
+                    $this->dbgLog('MQTT nrg (raw)', $payload);
+                    $this->parseAndStoreNRG($payload);
                 }
                 break;
             }
