@@ -226,7 +226,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         // --- Lademodus prüfen ---
         $mode  = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV, 1=Manuell, 2=Aus
         $nowMs = (int)(microtime(true) * 1000);
-        $lastFR = (int)$this->ReadAttributeInteger('LastFrcChangeMs');
+        $lastFR = $this->lastFrcChangeMs();
+
 
         // AUS: Force-Off erzwingen und raus
         if ($mode === 2) {
@@ -400,20 +401,26 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         $frcCur = (int)@GetValue(@$this->GetIDForIdent('FRC'));
 
-        // STOP (mit MinOnTime)
-        if ($charging && $stopOk && !$onHold && $frcCur === 2) {
+        // STOP
+        if ($charging && $stopOk && !$onHold) {
             $this->sendSet('frc', '1');
             $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
+            // Zähler resetten
+            $this->WriteAttributeInteger('CntStart', 0);
+            $this->WriteAttributeInteger('CntStop',  0);
             $this->dbgLog('Ladung', 'Stop (Stop-Hysterese erreicht)');
             return;
-        }
+}
 
-        // START (mit MinOffTime)
-        if (!$charging && $connected && $startOk && !$offHold && $surplus >= $minP && $frcCur !== 2) {
+        // START
+        if (!$charging && $connected && $startOk && !$offHold && $surplus >= $minP) {
             $this->sendSet('frc', '2');
             $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
+            // Zähler resetten
+            $this->WriteAttributeInteger('CntStart', 0);
+            $this->WriteAttributeInteger('CntStop',  0);
             $this->dbgLog('Ladung', 'Start (Hysterese & Reserve erfüllt, pm=' . ($ph===3?'3-ph':'1-ph') . ')');
-            // kein return: gleich Ampere setzen
+            // kein return: wir dürfen im Anschluss Ampere setzen
         }
 
         // --- Sanftes Ampere-Ramping (Rate-Limit + Publish-Gap) ---
@@ -512,6 +519,21 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 $fmt($houseNet)
             ));
         }
+    }
+
+    private function lastFrcChangeMs(): int
+    {
+        $attr = (int)$this->ReadAttributeInteger('LastFrcChangeMs');
+        $vid  = @$this->GetIDForIdent('FRC');
+        $varMs = 0;
+        if ($vid && @IPS_VariableExists($vid)) {
+            $vi = @IPS_GetVariable($vid);
+            // VariableUpdated = UNIX s → ms
+            if (is_array($vi) && isset($vi['VariableUpdated'])) {
+                $varMs = (int)$vi['VariableUpdated'] * 1000;
+            }
+        }
+        return max($attr, $varMs);
     }
 
 }
