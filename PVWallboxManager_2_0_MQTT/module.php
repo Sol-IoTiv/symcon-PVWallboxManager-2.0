@@ -24,10 +24,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->EnableAction('Ampere_A');
         $this->RegisterVariableInteger('Leistung_W',        'Leistung [W]',             '~Watt',  20);
         $this->RegisterVariableInteger('CarState',          'Fahrzeugstatus',           'GoE.CarState', 25);
-        $this->RegisterVariableBoolean('FahrzeugVerbunden', 'Fahrzeug verbunden',       '~Switch',30);
-//        $this->RegisterVariableBoolean('ALW',               'Allow Charging (ALW)',     '~Switch', 40);
-//        $this->RegisterVariableBoolean('Laden',             'Laden',                    '~Switch', 45);
-//        $this->EnableAction('Laden');
         $this->RegisterVariableInteger('FRC',               'Force State (FRC)',        'GoE.ForceState', 50);
         $this->EnableAction('FRC');
         $this->RegisterVariableInteger('Phasenmodus',       'Phasenmodus',              'GoE.PhaseMode', 60);
@@ -107,15 +103,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 $this->SetValueSafe('Ampere_A', (int)$payload);
                 break;
                 
-/*
-            case 'alw':
-            {
-                // v2: read-only Anzeige (true/false)
-                $this->SetValueSafe('ALW', ((int)$payload) === 1);
-                break;
-            }
-*/
-
             case 'frc':
             {
                 $v = (int)$payload;                    // 0/1/2
@@ -126,13 +113,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
             case 'car':
             {
-                // CarState ablegen + "verbunden" ableiten
                 $state = is_numeric($payload) ? (int)$payload : 0;
                 $this->SetValueSafe('CarState', $state);
-
-                // "verbunden" = Idle/Charging/WaitCar/Complete
-                $connected = in_array($state, [1,2,3,4], true);
-                $this->SetValueSafe('FahrzeugVerbunden', $connected);
                 break;
             }
 
@@ -357,18 +339,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 $this->SetValueSafe('Phasenmodus', $pm);
                 break;
             }
-
-/*            
-            case 'Laden': {
-                // true -> Start (2), false -> Stop (1)
-                $frc = $Value ? 2 : 1;
-                $this->mqttPublish($this->bt('frc').'/set', (string)$frc, 0, false);
-                // lokales Feedback
-                $this->SetValueSafe('FRC', $frc);
-                $this->SetValueSafe('Laden', (bool)$Value);
-                break;
-            }
-*/
 
             case 'FRC': {
                 // Direkte Steuerung über das Integer-Profil (0/1/2)
