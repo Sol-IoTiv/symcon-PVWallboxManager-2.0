@@ -116,4 +116,13 @@ trait Helpers
         return $this->getWBPowerW() > 300;     // Fallback: >300W = aktiv
     }
 
+    protected function ampRange(): array
+    {
+        $min = max(1, (int)$this->ReadPropertyInteger('MinAmp'));
+        $max = max($min, (int)$this->ReadPropertyInteger('MaxAmp'));
+        return [$min, $max];
+    }
+    protected function minAmp(): int { return $this->ampRange()[0]; }
+    protected function maxAmp(): int { return $this->ampRange()[1]; }
+
 }

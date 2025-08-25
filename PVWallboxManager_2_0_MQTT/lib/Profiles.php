@@ -18,7 +18,7 @@ trait Profiles
 
         if (!IPS_VariableProfileExists('GoE.Amp')) {
             IPS_CreateVariableProfile('GoE.Amp', VARIABLETYPE_INTEGER);
-            IPS_SetVariableProfileValues('GoE.Amp', 6, 16, 1);
+            IPS_SetVariableProfileValues('GoE.Amp', 6, 32, 1);
             IPS_SetVariableProfileText('GoE.Amp', '', ' A');
         }
 

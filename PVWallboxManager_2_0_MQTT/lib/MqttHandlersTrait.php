@@ -114,7 +114,10 @@ trait MqttHandlersTrait
             case 'nrg':
             {
                 $this->dbgMqtt('nrg', $topic, $payload);
-                $this->parseAndStoreNRG($payload);
+                $this->parseAndStoreNRG($payload); // setzt Leistung_W
+                // NEU:
+                $this->updateHouseNetFromInputs();
+                $this->Loop();
                 break;
             }
 
