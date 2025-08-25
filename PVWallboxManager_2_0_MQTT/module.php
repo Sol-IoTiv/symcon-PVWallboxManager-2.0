@@ -98,21 +98,34 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $auto  = trim($this->ReadAttributeString('AutoBaseTopic'));
         $state = $prop !== '' ? 'Fix (Property)' : ($auto !== '' ? 'Auto erkannt' : 'Unbekannt');
 
-        $form = [
+        // Prefix des Moduls sicher ermitteln
+        $mod    = @IPS_GetModule(@IPS_GetInstance($this->InstanceID)['ModuleID']);
+        $prefix = is_array($mod) ? ($mod['Prefix'] ?? 'PVWM2') : 'PVWM2';
+
+        return json_encode([
             'elements' => [
                 ['type' => 'Label', 'caption' => 'MQTT BaseTopic'],
                 ['type' => 'RowLayout', 'items' => [
                     ['type' => 'ValidationTextBox', 'name' => 'BaseTopic', 'caption' => 'BaseTopic (optional, leer = Auto)']
                 ]],
-                ['type' => 'Label', 'caption' => sprintf('Erkannt: %s', $auto !== '' ? $auto : '—')],
-                ['type' => 'Label', 'caption' => sprintf('Status: %s', $state)]
+                ['type' => 'Label', 'caption' => 'Erkannt: ' . ($auto !== '' ? $auto : '—')],
+                ['type' => 'Label', 'caption' => 'Status: ' . $state]
             ],
             'actions' => [
-                ['type' => 'Button', 'caption' => 'Erkannten BaseTopic übernehmen', 'onClick' => 'PVWM2_ApplyDetectedBaseTopic($id);', 'enabled' => ($auto !== '' && $prop === '')],
-                ['type' => 'Button', 'caption' => 'Auto-Erkennung zurücksetzen',     'onClick' => 'PVWM2_ClearDetectedBaseTopic($id);', 'enabled' => ($auto !== '')]
+                [
+                    'type'    => 'Button',
+                    'caption' => 'Erkannten BaseTopic übernehmen',
+                    'onClick' => $prefix . '_ApplyDetectedBaseTopic($id);',
+                    'enabled' => ($auto !== '' && $prop === '')
+                ],
+                [
+                    'type'    => 'Button',
+                    'caption' => 'Auto-Erkennung zurücksetzen',
+                    'onClick' => $prefix . '_ClearDetectedBaseTopic($id);',
+                    'enabled' => ($auto !== '')
+                ]
             ]
-        ];
-        return json_encode($form);
+        ]);
     }
 
     // Button: AutoBaseTopic -> Property übernehmen
