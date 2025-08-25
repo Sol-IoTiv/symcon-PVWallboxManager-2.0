@@ -150,14 +150,13 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             // keine Reference nötig – eigene Variable
         }
 
-        // --- LOOP-Timer sicher vorhanden, aber deaktiviert (kein Polling) ---
-        $wantedScript = $this->modulePrefix()."_Loop(\$_IPS['TARGET']);";
-        if (!@IPS_GetObjectIDByIdent('LOOP', $this->InstanceID)) {
-            $this->RegisterTimer('LOOP', 0, $wantedScript);
-        } else {
-            @IPS_SetEventScript(@IPS_GetObjectIDByIdent('LOOP', $this->InstanceID), $wantedScript);
-            $this->SetTimerInterval('LOOP', 0);
+        // --- LOOP-Timer Skript aktualisieren + deaktivieren ---
+        $wantedScript = $this->modulePrefix()."_Loop($_IPS['TARGET']);";
+        $eid = @IPS_GetObjectIDByIdent('LOOP', $this->InstanceID);
+        if ($eid) {
+            @IPS_SetEventScript($eid, $wantedScript);
         }
+        $this->SetTimerInterval('LOOP', 0);
 
         // --- Initial: HausNet berechnen & einmal regeln ---
         $this->RecalcHausverbrauchAbzWallbox(true);
