@@ -13,10 +13,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     use MqttClientTrait;     // Attach, Subscribe, Publish, sendSet()
     use MqttHandlersTrait;   // ReceiveData + Parsing/Abfragen
 
-    // Grenzen für go-e (ggf. für V4/32A anpassen)
-    //private const MIN_AMP = 6;
-    //private const MAX_AMP = 16;
-
     public function Create()
     {
         parent::Create();
@@ -69,6 +65,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->EnableAction('Ampere_A');
 
         $this->RegisterVariableInteger('Leistung_W',  'Leistung [W]',      '~Watt',          20);
+        $this->RegisterVariableInteger('HouseNet_W',  'Hausverbrauch (ohne WB) [W]', '~Watt', 21);
 
         $this->RegisterVariableInteger('CarState',    'Fahrzeugstatus',    'GoE.CarState',   25);
 
@@ -177,14 +174,32 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     {
         if (!$this->ReadPropertyBoolean('CtrlEnabled')) return;
 
-        // 1) Eingänge (in Watt)
-        $pv    = $this->readVarWUnit('VarPV_ID',     'VarPV_Unit');
-        $house = $this->readVarWUnit('VarHouse_ID',  'VarHouse_Unit');
-        $batt  = $this->readVarWUnit('VarBattery_ID','VarBattery_Unit');
+        // 1) Eingänge (in Watt, Einheit W/kW wird pro Quelle skaliert)
+        $pv         = $this->readVarWUnit('VarPV_ID',     'VarPV_Unit');      // W
+        $houseTotal = $this->readVarWUnit('VarHouse_ID',  'VarHouse_Unit');   // W (GESAMT inkl. WB)
+        $batt       = $this->readVarWUnit('VarBattery_ID','VarBattery_Unit'); // W (optional)
+
         if (!$this->ReadPropertyBoolean('BatteryPositiveIsCharge')) {
-            $batt = -$batt;
+            $batt = -$batt; // invertieren, falls System + = Entladen liefert
         }
-        $surplus = max(0, $pv - $house - max(0, $batt));
+
+        // Wallbox-Leistung aus eigener Instanz (kommt aus nrg → Leistung_W)
+        $wb = max(0, $this->getWBPowerW());
+
+        // Reiner Hausverbrauch (ohne Wallbox)
+        $houseNet = max(0, $houseTotal - $wb);
+        $this->SetValueSafe('HouseNet_W', (int)round($houseNet));
+
+        // Überschuss = PV - Haus(ohne WB) - Batterie(Ladeleistung)
+        $surplus = max(0, $pv - $houseNet - max(0, $batt));
+
+        // (optional) Debug-Bilanz
+        $this->dbgLog(
+            'Bilanz',
+            sprintf('PV=%dW, HausGes=%dW, WB=%dW, HausNet=%dW, Batt=%dW, Überschuss=%dW',
+                (int)$pv, (int)$houseTotal, (int)$wb, (int)$houseNet, (int)$batt, (int)$surplus
+            )
+        );
 
         // 2) aktuelle Zustände
         $pm  = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')) ?: 1;

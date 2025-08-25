@@ -102,4 +102,11 @@ trait Helpers
         $scale = ($unit === 'KW') ? 1000.0 : 1.0;
         return (float)$val * $scale;
     }
+
+    protected function getWBPowerW(): int
+    {
+        $vid = @$this->GetIDForIdent('Leistung_W');
+        return $vid ? (int)@GetValue($vid) : 0;
+    }
+
 }
