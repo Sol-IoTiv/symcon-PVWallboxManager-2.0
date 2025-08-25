@@ -94,8 +94,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 //        $this->RegisterTimer('LOOP', 0, $this->modulePrefix().'_Loop($id);');
         $this->RegisterTimer('LOOP', 0, $this->modulePrefix()."_Loop(\$_IPS['TARGET']);");
 
-
-
         // Debug / Rohwerte
 //        $this->RegisterVariableString('NRG_RAW',      'NRG (roh)',         '~TextBox',       90);
 
