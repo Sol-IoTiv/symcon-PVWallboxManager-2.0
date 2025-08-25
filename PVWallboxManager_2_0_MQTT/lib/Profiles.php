@@ -34,5 +34,13 @@ trait Profiles
             IPS_SetVariableProfileAssociation('GoE.ForceState', 1, 'Stop',       '', -1);
             IPS_SetVariableProfileAssociation('GoE.ForceState', 2, 'Start',      '', -1);
         }
+
+        // in ensureProfiles()
+        if (!IPS_VariableProfileExists('PVWM.Mode')) {
+            IPS_CreateVariableProfile('PVWM.Mode', VARIABLETYPE_INTEGER);
+            IPS_SetVariableProfileAssociation('PVWM.Mode', 0, 'PV-Automatik', '', -1);
+            IPS_SetVariableProfileAssociation('PVWM.Mode', 1, 'Manuell (fix)', '', -1);
+            IPS_SetVariableProfileAssociation('PVWM.Mode', 2, 'Aus (gesperrt)', '', -1);
+        }
     }
 }
