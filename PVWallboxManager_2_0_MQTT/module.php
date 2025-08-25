@@ -263,47 +263,69 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         // 5) Start/Stop + Phasen + Ampere
         // -------------------------
 
-        $U       = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
-        $ph      = ((int)@GetValue(@$this->GetIDForIdent('Phasenmodus')) === 2) ? 3 : 1;
-        $minA    = (int)$this->ReadPropertyInteger('MinAmp');
-        $maxA    = (int)$this->ReadPropertyInteger('MaxAmp');
-        $resW    = (int)$this->ReadPropertyInteger('StartReserveW'); // Reserve über MinAmp
+        $U        = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
+        $pm       = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')) ?: 1;   // 1=1ph, 2=3ph
+        $ph       = ($pm === 2) ? 3 : 1;
+        $minA     = (int)$this->ReadPropertyInteger('MinAmp');
+        $maxA     = (int)$this->ReadPropertyInteger('MaxAmp');
+        $resW     = (int)$this->ReadPropertyInteger('StartReserveW');            // z.B. 200W
+        $nowMs    = (int)(microtime(true) * 1000);
+        $lastFR   = (int)$this->ReadAttributeInteger('LastFrcChangeMs');
+        $onHold   = ($nowMs - $lastFR) < (int)$this->ReadPropertyInteger('MinOnTimeMs');
+        $offHold  = ($nowMs - $lastFR) < (int)$this->ReadPropertyInteger('MinOffTimeMs');
 
-        $minPowerW = $minA * $U * $ph + $resW;     // so viel Überschuss brauchen wir mindestens zum Start
-
-        $nowMs   = (int)(microtime(true) * 1000);
-        $lastFR  = (int)$this->ReadAttributeInteger('LastFrcChangeMs');
-        $onHold  = ($nowMs - $lastFR) < (int)$this->ReadPropertyInteger('MinOnTimeMs');
-        $offHold = ($nowMs - $lastFR) < (int)$this->ReadPropertyInteger('MinOffTimeMs');
-
+        $car      = (int)@GetValue(@$this->GetIDForIdent('CarState'));
+        $connected= ($car >= 3);                             // 3=verbunden/bereit, 4=Beendet (noch verbunden)
         $charging = $this->isChargingActive();
 
-        // --- STOP: nur wenn wir laden, Stop-Hysterese erfüllt UND Mindest-Einzeit vorbei ---
+        // Mindestleistung für Start je nach Phasen
+        $minP1 = $minA * $U * 1 + $resW;
+        $minP3 = $minA * $U * 3 + $resW;
+        $minP  = ($ph === 3) ? $minP3 : $minP1;
+
+        // --- Falls aktuell 3-ph und Überschuss reicht nicht für 3-ph, aber für 1-ph: zuerst auf 1-ph umschalten ---
+        $holdMs = (int)$this->ReadPropertyInteger('MinHoldAfterPhaseMs');
+        $lastSw = (int)$this->ReadAttributeInteger('LastPhaseSwitchMs');
+        $holdOver = ($nowMs - $lastSw) >= $holdMs;
+
+        $this->dbgLog('StartCheck', sprintf(
+            'car=%d connected=%s charging=%s startOk=%d stopOk=%d offHold=%s onHold=%s surplus=%dW minP1=%dW minP3=%dW pm=%d',
+            $car, $connected?'ja':'nein', $charging?'ja':'nein', $startOk, $stopOk,
+            $offHold?'Warte':'ok', $onHold?'Warte':'ok', $surplus, $minP1, $minP3, $pm
+        ));
+
+        if (!$charging && $pm === 2 && $holdOver && $surplus < $minP3 && $surplus >= $minP1) {
+            $this->sendSet('psm', '1');
+            $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
+            $this->WriteAttributeInteger('LastPhaseMode', 1);
+            $this->dbgChanged('Phasenmodus', '3-phasig', '1-phasig (für Start)');
+            return; // im nächsten Tick mit 1-ph weiter
+        }
+
+        // --- STOP: nur wenn wir wirklich laden, Stop-Hysterese erfüllt und Mindest-Einzeit vorbei ---
         if ($charging && $stopOk && !$onHold) {
             $this->sendSet('frc', '1'); // Force-Off
             $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
             $this->dbgLog('Ladung', 'Stop (Stop-Hysterese erreicht)');
-            return; // in diesem Takt nichts weiter schicken
+            return;
         }
 
-        // --- START: nur wenn NICHT laden, Start-Hysterese erfüllt, Mindest-Auszeit vorbei UND genug Reserve für MinAmp ---
-        if (!$charging && $startOk && !$offHold && $surplus >= $minPowerW) {
+        // --- START: nur wenn nicht laden, Fahrzeug verbunden, Start-Hysterese, Mindest-Auszeit vorbei, und genug Reserve ---
+        if (!$charging && $connected && $startOk && !$offHold && $surplus >= $minP) {
             $this->sendSet('frc', '2'); // Force-On
             $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
-            $this->dbgLog('Ladung', 'Start (Start-Hysterese & Reserve erfüllt)');
-            // nicht "return": wir können gleich den ersten Ampere-Setpoint mitschicken
+            $this->dbgLog('Ladung', 'Start (Hysterese & Reserve erfüllt, pm=' . ($ph===3?'3-ph':'1-ph') . ')');
+            // kein return: wir können gleich den ersten Ampere-Setpoint schicken
         }
 
-        // --- Ampere-Setpoint: vorsichtig nach unten/oben anpassen ---
+        // --- Ampere-Setpoint konservativ setzen ---
         $lastPub = (int)$this->ReadAttributeInteger('LastPublishMs');
         $gapMs   = (int)$this->ReadPropertyInteger('MinPublishGapMs');
         $lastA   = (int)$this->ReadAttributeInteger('LastAmpSet');
 
-        // etwas Reserve bei der Berechnung weglassen, damit wir nicht sofort ins Negative rutschen
+        // kleine Sicherheitsmarge, damit wir nicht sofort ins Negative rutschen
         $effSurplus = max(0, $surplus - (int)floor($resW / 2));
-
-        // nicht "ceil", sondern "floor" – konservativer
-        $neededA = (int)floor($effSurplus / ($U * $ph));
+        $neededA = (int)floor($effSurplus / ($U * (($pm===2)?3:1)));
         $setA    = max($minA, min($maxA, $neededA));
 
         if (($nowMs - $lastPub) >= $gapMs && $setA !== $lastA) {

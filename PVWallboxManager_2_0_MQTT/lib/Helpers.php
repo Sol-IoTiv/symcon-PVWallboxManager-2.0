@@ -112,9 +112,8 @@ trait Helpers
     protected function isChargingActive(): bool
     {
         $car = (int)@GetValue(@$this->GetIDForIdent('CarState'));
-        if ($car >= 2) return true; // 2=lädt, 3=verbunden (je nach Wallbox-Logik)
-        $wbW = $this->getWBPowerW();
-        return $wbW > 300; // Fallback: mehr als 300W an der Box -> "aktiv"
+        if ($car === 2) return true;           // 2 = lädt
+        return $this->getWBPowerW() > 300;     // Fallback: >300W = aktiv
     }
 
 }
