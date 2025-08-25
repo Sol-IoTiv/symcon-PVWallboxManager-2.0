@@ -14,8 +14,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     use MqttHandlersTrait;   // ReceiveData + Parsing/Abfragen
 
     // Grenzen für go-e (ggf. für V4/32A anpassen)
-    private const MIN_AMP = 6;
-    private const MAX_AMP = 16;
+    //private const MIN_AMP = 6;
+    //private const MAX_AMP = 16;
 
     public function Create()
     {
@@ -91,11 +91,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterAttributeInteger('LastPhaseSwitchMs', 0);
 
         // --- Timer für Control-Loop ---
-//        $this->RegisterTimer('LOOP', 0, $this->modulePrefix().'_Loop($id);');
         $this->RegisterTimer('LOOP', 0, $this->modulePrefix()."_Loop(\$_IPS['TARGET']);");
-
-        // Debug / Rohwerte
-//        $this->RegisterVariableString('NRG_RAW',      'NRG (roh)',         '~TextBox',       90);
 
         // (Für späteres WebFront-Preview)
         // $this->RegisterVariableString('Preview', 'Wallbox-Preview', '~HTMLBox', 100);
@@ -127,22 +123,21 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             return;
         }
 
-        // --- LOOP-Timer sicherstellen (ohne UnregisterTimer) ---
-        $enabled  = $this->ReadPropertyBoolean('CtrlEnabled');
-        $interval = max(200, (int)$this->ReadPropertyInteger('CtrlIntervalMs'));
+        // --- LOOP-Timer sicher behandeln (ohne Doppel-Register) ---
+        $enabled      = $this->ReadPropertyBoolean('CtrlEnabled');
+        $interval     = max(200, (int)$this->ReadPropertyInteger('CtrlIntervalMs'));
+        $wantedScript = $this->modulePrefix()."_Loop(\$_IPS['TARGET']);";
 
-        // 1) Event-ID des Timers ermitteln (per Ident)
+        // 1) Event-ID des Timers per Ident holen
         $eid = @IPS_GetObjectIDByIdent('LOOP', $this->InstanceID);
-        $wantedScript = $this->modulePrefix() . "_Loop(\$_IPS['TARGET']);";
 
-        // 2) Falls Timer fehlt (alte Instanz?), neu anlegen
-        if (!$eid) {
-            $this->RegisterTimer('LOOP', 0, $wantedScript);
-            $eid = @IPS_GetObjectIDByIdent('LOOP', $this->InstanceID);
-        } else {
-            // 3) Script-Text ggf. auf neuen Inhalt setzen (Migration von `$id` -> $_IPS['TARGET'])
-            // Achtung: manche Builds haben 'EventScript' nicht im Array – Setzen ist unkritisch.
+        if ($eid && @IPS_EventExists($eid)) {
+            // 2) Script-Text (Migration von $id -> $_IPS['TARGET'])
             @IPS_SetEventScript($eid, $wantedScript);
+        } else {
+            // 3) Fallback: Timer fehlt (alte Instanz) -> leise neu anlegen
+            @ $this->RegisterTimer('LOOP', 0, $wantedScript);  // @ unterdrückt „bereits vorhanden“-Warnung
+            $eid = @IPS_GetObjectIDByIdent('LOOP', $this->InstanceID);
         }
 
         // 4) Intervall setzen/aktivieren
