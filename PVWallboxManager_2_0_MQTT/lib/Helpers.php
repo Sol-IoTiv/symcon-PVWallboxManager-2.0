@@ -170,5 +170,41 @@ trait Helpers
         return true;
     }
 
+    private function rampAmpere(int $targetA): void
+    {
+        $minA = (int)$this->ReadPropertyInteger('MinAmp');
+        $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
+        $targetA = max($minA, min($maxA, $targetA));
+
+        $vid = @$this->GetIDForIdent('Ampere_A'); // deine Soll-Ampere-Var (falls vorhanden)
+        $curA = $vid ? (int)@GetValue($vid) : $minA;
+
+        $stepA = max(1, (int)$this->ReadPropertyInteger('RampStepA')); // default 1 A
+        $hold  = max(500, (int)$this->ReadPropertyInteger('RampHoldMs')); // default 3000 ms
+
+        $nowMs  = (int)(microtime(true) * 1000);
+        $lastMs = (int)$this->ReadAttributeInteger('LastAmpChangeMs');
+        if (($nowMs - $lastMs) < $hold) {
+            return; // noch warten
+        }
+
+        $nextA = $curA;
+        if ($targetA > $curA)       $nextA = min($curA + $stepA, $targetA);
+        elseif ($targetA < $curA)   $nextA = max($curA - $stepA, $targetA);
+
+        if ($nextA !== $curA) {
+            // hier deine Setz-API:
+            $this->sendSet('ama', (string)$nextA); // oder charger->setChargingCurrent($nextA)
+            if ($vid) @SetValue($vid, $nextA);
+            $this->WriteAttributeInteger('LastAmpChangeMs', $nowMs);
+            $this->dbgLog('RAMP', "Ampere: $curA A → $nextA A (Ziel $targetA A)");
+        }
+    }
+
+    private function scheduleUpdateFromMqtt(int $delayMs = 350): void
+    {
+        // KEIN RegisterTimer hier – der Timer existiert aus Create()
+        $this->SetTimerInterval('LOOP', max(150, $delayMs));
+    }
 
 }

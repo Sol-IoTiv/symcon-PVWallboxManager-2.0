@@ -292,15 +292,23 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $houseNet = max(0, $houseTotal - $wbEff);
         $this->SetValueSafe('HouseNet_W', (int)round($houseNet));
 
-        // Überschuss = PV - Haus(ohne WB) - Batterie(Ladeleistung)
-        $surplus = max(0, $pv - $houseNet - max(0, $batt));
+        // Überschuss (ROH) = PV - Haus(ohne WB) - Batterie(Ladeleistung)
+        $surplusRaw = max(0, $pv - $houseNet - max(0, $batt));
+
+        // -------- 1a) Glättung (EMA) gegen Flattern --------
+        $alphaPermille = (int)$this->ReadPropertyInteger('SmoothAlphaPermille');
+        if ($alphaPermille <= 0) { $alphaPermille = 350; } // Default 0.35, falls Property (noch) fehlt
+        $alpha = min(1.0, max(0.0, $alphaPermille / 1000.0));
+        $prevSmooth = (int)$this->ReadAttributeInteger('SmoothSurplusW');
+        $surplus = (int)round($alpha * $surplusRaw + (1.0 - $alpha) * $prevSmooth);
+        $this->WriteAttributeInteger('SmoothSurplusW', $surplus);
 
         $this->dbgLog(
             'Bilanz',
             sprintf(
-                'PV=%dW, HausGes=%dW, WB=%dW (> %dW? %s), HausNet=%dW, Batt=%+dW, Überschuss=%dW',
+                'PV=%dW, HausGes=%dW, WB=%dW (> %dW? %s), HausNet=%dW, Batt=%+dW, Überschuss roh=%dW, glatt=%dW (α=%.2f)',
                 (int)$pv, (int)$houseTotal, (int)$wb, (int)$minWB, ($wbEff>0?'ja':'nein'),
-                (int)$houseNet, (int)$batt, (int)$surplus
+                (int)$houseNet, (int)$batt, (int)$surplusRaw, (int)$surplus, $alpha
             )
         );
 
@@ -308,14 +316,21 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $pm  = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')) ?: 1; // 1=1ph, 2=3ph
         $car = (int)@GetValue(@$this->GetIDForIdent('CarState')) ?: 0;
 
-        // -------- 3) Start/Stop-Hysterese --------
+        // -------- 3) Start/Stop-Hysterese (mit Counter-Decrement im Band) --------
         $startW = (int)$this->ReadPropertyInteger('StartThresholdW');
         $stopW  = (int)$this->ReadPropertyInteger('StopThresholdW');
         $cStart = (int)$this->ReadAttributeInteger('CntStart');
         $cStop  = (int)$this->ReadAttributeInteger('CntStop');
 
-        $cStart = ($surplus >= $startW) ? ($cStart + 1) : 0;
-        $cStop  = ($surplus <= $stopW)  ? ($cStop  + 1) : 0;
+        if ($surplus >= $startW) {
+            $cStart++; $cStop = max(0, $cStop - 1);
+        } elseif ($surplus <= $stopW) {
+            $cStop++;  $cStart = max(0, $cStart - 1);
+        } else {
+            // im Band beide leicht abbauen → verhindert „Sägezahn“
+            $cStart = max(0, $cStart - 1);
+            $cStop  = max(0, $cStop  - 1);
+        }
         $this->WriteAttributeInteger('CntStart', $cStart);
         $this->WriteAttributeInteger('CntStop',  $cStop);
 
@@ -351,7 +366,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             return;
         }
 
-        // -------- 5) Start/Stop + Ampere --------
+        // -------- 5) Start/Stop + Ampere (mit MinOn/Off-Wächter & sanftem Ramping) --------
         $U      = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
         $ph     = ($pm === 2) ? 3 : 1;
         [$minA, $maxA] = $this->ampRange();
@@ -368,7 +383,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $minP  = ($ph === 3) ? $minP3 : $minP1;
 
         $this->dbgLog('StartCheck', sprintf(
-            'car=%d connected=%s charging=%s startOk=%d stopOk=%d offHold=%s onHold=%s surplus=%dW minP1=%dW minP3=%dW pm=%d',
+            'car=%d connected=%s charging=%s startOk=%d stopOk=%d offHold=%s onHold=%s surplus(glatt)=%dW minP1=%dW minP3=%dW pm=%d',
             $car, $connected?'ja':'nein', $charging?'ja':'nein', $startOk, $stopOk,
             $offHold?'Warte':'ok', $onHold?'Warte':'ok', $surplus, $minP1, $minP3, $pm
         ));
@@ -382,167 +397,62 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             return;
         }
 
-        // STOP
-        if ($charging && $stopOk && !$onHold) {
+        $frcCur = (int)@GetValue(@$this->GetIDForIdent('FRC'));
+
+        // STOP (mit MinOnTime)
+        if ($charging && $stopOk && !$onHold && $frcCur === 2) {
             $this->sendSet('frc', '1');
             $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
             $this->dbgLog('Ladung', 'Stop (Stop-Hysterese erreicht)');
             return;
         }
 
-        // START
-        if (!$charging && $connected && $startOk && !$offHold && $surplus >= $minP) {
+        // START (mit MinOffTime)
+        if (!$charging && $connected && $startOk && !$offHold && $surplus >= $minP && $frcCur !== 2) {
             $this->sendSet('frc', '2');
             $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
             $this->dbgLog('Ladung', 'Start (Hysterese & Reserve erfüllt, pm=' . ($ph===3?'3-ph':'1-ph') . ')');
             // kein return: gleich Ampere setzen
         }
 
-        // Ampere-Setpoint konservativ
-        $lastPub    = (int)$this->ReadAttributeInteger('LastPublishMs');
-        $gapMs      = (int)$this->ReadPropertyInteger('MinPublishGapMs');
-        $lastA      = (int)$this->ReadAttributeInteger('LastAmpSet');
-        $effSurplus = max(0, $surplus - (int)floor($resW / 2));
-        $neededA    = (int)floor($effSurplus / ($U * $ph));
-        $setA       = max($minA, min($maxA, $neededA));
+        // --- Sanftes Ampere-Ramping (Rate-Limit + Publish-Gap) ---
+        $lastPub   = (int)$this->ReadAttributeInteger('LastPublishMs');
+        $gapMs     = (int)$this->ReadPropertyInteger('MinPublishGapMs');
+        $lastASet  = (int)$this->ReadAttributeInteger('LastAmpSet');
+        $vidA      = @$this->GetIDForIdent('Ampere_A');
+        $curA      = $vidA ? (int)@GetValue($vidA) : $lastASet;
 
-        if (($nowMs - $lastPub) >= $gapMs && $setA !== $lastA) {
-            $this->sendSet('ama', (string)$setA);
-            $this->WriteAttributeInteger('LastAmpSet', $setA);
-            $this->WriteAttributeInteger('LastPublishMs', $nowMs);
-            $this->dbgChanged('Ampere', $lastA.' A', $setA.' A');
+        // Zielampere aus GLATTEM Überschuss, konservativ mit halber Reserve
+        $effSurplus = max(0, $surplus - (int)floor($resW / 2));
+        $targetA    = (int)floor($effSurplus / ($U * $ph));
+        $targetA    = max($minA, min($maxA, $targetA));
+
+        // Ramp-Parameter (mit Defaults, falls Property fehlt)
+        $rampStep = max(1, (int)$this->ReadPropertyInteger('RampStepA') ?: 1);
+        $rampHold = max(500, (int)$this->ReadPropertyInteger('RampHoldMs') ?: 3000);
+        $lastAmpChange = (int)$this->ReadAttributeInteger('LastAmpChangeMs');
+
+        if ($frcCur === 2) { // nur wenn Freigabe aktiv
+            $canPublish = (($nowMs - $lastPub) >= $gapMs);
+            $canRamp    = (($nowMs - $lastAmpChange) >= $rampHold);
+
+            if ($canPublish && $canRamp && $targetA !== $curA) {
+                $nextA = $curA;
+                if      ($targetA > $curA) $nextA = min($curA + $rampStep, $targetA);
+                else if ($targetA < $curA) $nextA = max($curA - $rampStep, $targetA);
+
+                if ($nextA !== $curA) {
+                    $this->sendSet('ama', (string)$nextA);
+                    if ($vidA) @SetValue($vidA, $nextA);
+                    $this->WriteAttributeInteger('LastAmpSet', $nextA);
+                    $this->WriteAttributeInteger('LastPublishMs', $nowMs);
+                    $this->WriteAttributeInteger('LastAmpChangeMs', $nowMs);
+                    $this->dbgChanged('Ampere', $curA.' A', $nextA.' A');
+                }
+            }
         }
     }
 
-    // -------- Konfiguration (ohne form.json) --------
-    public function GetConfigurationForm()
-    {
-        $prop  = trim($this->ReadPropertyString('BaseTopic'));
-        $auto  = trim($this->ReadAttributeString('AutoBaseTopic'));
-        $state = ($prop !== '') ? 'Fix (Property)' : (($auto !== '') ? 'Auto erkannt' : 'Unbekannt');
-
-        $inst   = @IPS_GetInstance($this->InstanceID);
-        $mod    = is_array($inst) ? @IPS_GetModule($inst['ModuleID']) : null;
-        $prefix = (is_array($mod) && !empty($mod['Prefix'])) ? $mod['Prefix'] : 'GOEMQTT';
-
-        return json_encode([
-            'elements' => [
-
-                // MQTT
-                [
-                    'type'    => 'ExpansionPanel',
-                    'caption' => 'MQTT / Geräte-Zuordnung',
-                    'items'   => [
-                        ['type' => 'Label', 'caption' => 'BaseTopic (leer = automatische Erkennung)'],
-                        ['type' => 'ValidationTextBox', 'name' => 'BaseTopic', 'caption' => 'MQTT BaseTopic (optional)'],
-                        ['type' => 'Label', 'caption' => 'Erkannt: ' . ($auto !== '' ? $auto : '—')],
-                        ['type' => 'Label', 'caption' => 'Status: ' . $state],
-                        [
-                            'type'  => 'RowLayout',
-                            'items' => [
-                                [
-                                    'type'    => 'Button',
-                                    'caption' => 'Erkannten BaseTopic übernehmen',
-                                    'onClick' => sprintf('%s_ApplyDetectedBaseTopic($id);', $prefix),
-                                    'enabled' => ($auto !== '' && $prop === '')
-                                ],
-                                [
-                                    'type'    => 'Button',
-                                    'caption' => 'Auto-Erkennung zurücksetzen',
-                                    'onClick' => sprintf('%s_ClearDetectedBaseTopic($id);', $prefix),
-                                    'enabled' => ($auto !== '')
-                                ]
-                            ]
-                        ],
-                        ['type' => 'ValidationTextBox', 'name' => 'DeviceIDFilter', 'caption' => 'DeviceID-Filter (optional)']
-                    ]
-                ],
-
-                // Energiequellen
-                [
-                    'type'    => 'ExpansionPanel',
-                    'caption' => 'Energiequellen',
-                    'items'   => [
-                        ['type' => 'Label', 'caption' => 'Pflicht: PV-Erzeugung & Hausverbrauch. Batterie optional.'],
-                        [
-                            'type'  => 'RowLayout',
-                            'items' => [
-                                ['type' => 'SelectVariable', 'name' => 'VarPV_ID', 'caption' => 'PV-Erzeugung'],
-                                ['type' => 'Select', 'name' => 'VarPV_Unit', 'caption' => 'Einheit',
-                                    'options' => [
-                                        ['caption' => 'Watt (W)', 'value' => 'W'],
-                                        ['caption' => 'Kilowatt (kW)', 'value' => 'kW']
-                                    ]
-                                ]
-                            ]
-                        ],
-                        [
-                            'type'  => 'RowLayout',
-                            'items' => [
-                                ['type' => 'SelectVariable', 'name' => 'VarHouse_ID', 'caption' => 'Gesamter Hausverbrauch'],
-                                ['type' => 'Select', 'name' => 'VarHouse_Unit', 'caption' => 'Einheit',
-                                    'options' => [
-                                        ['caption' => 'Watt (W)', 'value' => 'W'],
-                                        ['caption' => 'Kilowatt (kW)', 'value' => 'kW']
-                                    ]
-                                ]
-                            ]
-                        ],
-                        [
-                            'type'  => 'RowLayout',
-                            'items' => [
-                                ['type' => 'SelectVariable', 'name' => 'VarBattery_ID', 'caption' => 'Batterieleistung (+=Laden)'],
-                                ['type' => 'Select', 'name' => 'VarBattery_Unit', 'caption' => 'Einheit',
-                                    'options' => [
-                                        ['caption' => 'Watt (W)', 'value' => 'W'],
-                                        ['caption' => 'Kilowatt (kW)', 'value' => 'kW']
-                                    ]
-                                ],
-                                ['type' => 'CheckBox', 'name' => 'BatteryPositiveIsCharge', 'caption' => 'Positiv = Laden (invertieren, falls nötig)']
-                            ]
-                        ]
-                    ]
-                ],
-
-                // Hysterese / Phasen
-                [
-                    'type'    => 'ExpansionPanel',
-                    'caption' => 'Regelung',
-                    'items'   => [
-                        ['type' => 'NumberSpinner', 'name' => 'StartThresholdW', 'caption' => 'Start bei PV-Überschuss (W)'],
-                        ['type' => 'NumberSpinner', 'name' => 'StartCycles',     'caption' => 'Start-Hysterese (Zyklen)'],
-                        ['type' => 'NumberSpinner', 'name' => 'StopThresholdW',  'caption' => 'Stop bei fehlendem PV-Überschuss (W)'],
-                        ['type' => 'NumberSpinner', 'name' => 'StopCycles',      'caption' => 'Stop-Hysterese (Zyklen)'],
-
-                        ['type' => 'NumberSpinner', 'name' => 'ThresTo1p_W',     'caption' => 'Schwelle auf 1-phasig (W)'],
-                        ['type' => 'NumberSpinner', 'name' => 'To1pCycles',      'caption' => 'Zählerlimit 1-phasig'],
-                        ['type' => 'NumberSpinner', 'name' => 'ThresTo3p_W',     'caption' => 'Schwelle auf 3-phasig (W)'],
-                        ['type' => 'NumberSpinner', 'name' => 'To3pCycles',      'caption' => 'Zählerlimit 3-phasig'],
-
-                        ['type' => 'NumberSpinner', 'name' => 'MinAmp',          'caption' => 'Min. Ampere'],
-                        ['type' => 'NumberSpinner', 'name' => 'MaxAmp',          'caption' => 'Max. Ampere'],
-                        ['type' => 'NumberSpinner', 'name' => 'NominalVolt',     'caption' => 'Nennspannung pro Phase (V)'],
-
-                        ['type' => 'NumberSpinner', 'name' => 'MinHoldAfterPhaseMs', 'caption' => 'Sperrzeit nach Phasenwechsel (ms)'],
-                        ['type' => 'NumberSpinner', 'name' => 'MinPublishGapMs',     'caption' => 'Mindestabstand ama/set (ms)'],
-
-//                        ['type' => 'CheckBox',      'name' => 'CtrlEnabled',     'caption' => 'Regelung aktiv'],
-//                        ['type' => 'NumberSpinner', 'name' => 'CtrlIntervalMs',  'caption' => 'Regel-Intervall (ms)']
-                    ]
-                ],
-
-                // Debug
-                [
-                    'type'    => 'ExpansionPanel',
-                    'caption' => 'Debug & Diagnose',
-                    'items'   => [
-                        ['type' => 'CheckBox', 'name' => 'DebugLogging',
-                         'caption' => '🐞 Debug-Logging aktivieren (Instanz-Debug & Meldungen)']
-                    ]
-                ]
-            ]
-        ]);
-    }
 
     public function ApplyDetectedBaseTopic(): void
     {
