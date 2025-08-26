@@ -277,6 +277,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->WriteAttributeInteger('Slow_LastCalcA', $targetA);
     }
 
+    
     // -------------------------
     // Slow: Regelung (alle X s) – ±1 A Richtung Ziel
     // -------------------------
@@ -497,5 +498,4 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             ]
         ], JSON_UNESCAPED_UNICODE);
     }
-    
 }
