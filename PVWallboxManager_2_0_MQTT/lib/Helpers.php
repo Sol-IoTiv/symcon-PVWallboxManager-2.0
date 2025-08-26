@@ -44,13 +44,15 @@ trait Helpers
 
     protected function logUnified(string $level, string $title, string $message, bool $force = false): void
     {
-        $do = $force || $this->ReadPropertyBoolean('DebugLogging');
-        if (!$do) return;
-        $label = $this->emojiFor($level) . ' ' . $title;
-        $this->SendDebug($label, $message, 0);
-        IPS_LogMessage($this->modulePrefix(), $label . ': ' . $message);
+        if (!$force && !$this->pvwmDebugEnabled()) return;
+
+        // Emoji optional (falls Methode fehlt → ohne Emoji)
+        $emoji = method_exists($this, 'emojiFor') ? (string)$this->emojiFor($level) : '';
+        $label = ($emoji !== '' ? $emoji.' ' : '') . $title;
+
+        @ $this->SendDebug($label, $message, 0);
+        @ IPS_LogMessage($this->modulePrefix(), $label.' | '.$message);
     }
-    protected function dbgLog(string $title, string $message): void   { $this->logUnified('debug', $title, $message, false); }
     protected function infoLog(string $title, string $message, bool $force = true): void { $this->logUnified('info',  $title, $message, $force); }
     protected function warnLog(string $title, string $message): void  { $this->logUnified('warn',  $title, $message, true); }
     protected function errorLog(string $title, string $message): void { $this->logUnified('error', $title, $message, true); }
@@ -72,6 +74,7 @@ trait Helpers
         $extra = mb_strlen($s) - $max;
         return mb_substr($s, 0, $max) . "… (+{$extra} chars)";
     }
+/*
     protected function dbgMqtt(string $key, string $topic, string $payload): void
     {
         $this->dbgLog('MQTT ' . $key . $this->dbgCtx($topic), $this->strShort($payload));
@@ -83,7 +86,7 @@ trait Helpers
              . ' → new=' . json_encode($new, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $this->dbgLog($title, $msg);
     }
-
+*/
     protected function phaseModeLabel(int $pm): string { return ($pm === 2) ? '3-phasig' : '1-phasig'; }
     protected function frcLabel(int $v): string { return [0=>'Neutral',1=>'Stop',2=>'Start'][$v] ?? (string)$v; }
     protected function carStateLabel(int $s): string
@@ -205,6 +208,35 @@ trait Helpers
     {
         // KEIN RegisterTimer hier – der Timer existiert aus Create()
         $this->SetTimerInterval('LOOP', max(150, $delayMs));
+    }
+
+    private function pvwmDebugEnabled(): bool
+    {
+        // erlaubt auch das alte Flag 'DebugLogging' als Fallback
+        return (bool)$this->ReadPropertyBoolean('DebugPVWM')
+            || (bool)$this->ReadPropertyBoolean('DebugLogging');
+    }
+
+    private function mqttDebugEnabled(): bool
+    {
+        return (bool)$this->ReadPropertyBoolean('DebugMQTT');
+    }
+
+    protected function dbgLog(string $topic, string $msg): void
+    {
+        $this->logUnified('info', $topic, $msg);
+    }
+
+    protected function dbgChanged(string $what, string $old, string $new): void
+    {
+        $this->logUnified('change', 'CHANGE', sprintf('%s: %s → %s', $what, $old, $new));
+    }
+
+    protected function dbgMqtt(string $tag, string $line): void
+    {
+        if (!(bool)$this->ReadPropertyBoolean('DebugMQTT')) return;
+        @ $this->SendDebug('MQTT '.$tag, $line, 0);
+        @ IPS_LogMessage($this->modulePrefix().'-MQTT', $line);
     }
 
 }

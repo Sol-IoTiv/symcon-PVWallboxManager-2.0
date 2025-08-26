@@ -25,7 +25,7 @@ trait MqttHandlersTrait
 
                 if ($detectedBase !== '' && $this->ReadAttributeString('AutoBaseTopic') !== $detectedBase) {
                     $this->WriteAttributeString('AutoBaseTopic', $detectedBase);
-                    $this->infoLog('Auto-BaseTopic' . $this->dbgCtx($topic), $detectedBase, true);
+                    $this->dbgLog('AutoBaseTopic', "detected={$detectedBase} (id={$detectedId}) via {$topic}");
                     $this->mqttSubscribe($detectedBase . '/+', 0);
                 }
             } else {
@@ -34,6 +34,9 @@ trait MqttHandlersTrait
         } else {
             if (strpos($topic, $base . '/') !== 0) return;
         }
+
+        // Roh-MQTT loggen (schaltbar)
+        $this->dbgMqtt('RX', $topic . ' = ' . $payload);
 
         // Key bestimmen
         $baseNow = $this->currentBaseTopic();
@@ -52,7 +55,7 @@ trait MqttHandlersTrait
                 $old = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
                 if ($old !== $new) {
                     $this->SetValueSafe('Ampere_A', $new);
-                    $this->dbgChanged('Ampere' . $this->dbgCtx($topic), $old . ' A', $new . ' A');
+                    $this->dbgChanged('Ampere @'.$topic, $old.' A', $new.' A');
                 }
                 break;
             }
@@ -63,7 +66,7 @@ trait MqttHandlersTrait
                 $old = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus'));
                 if ($old !== $new) {
                     $this->SetValueSafe('Phasenmodus', $new);
-                    $this->dbgChanged('Phasenmodus' . $this->dbgCtx($topic), $this->phaseModeLabel($old), $this->phaseModeLabel($new));
+                    $this->dbgChanged('Phasenmodus @'.$topic, $this->phaseModeLabel($old), $this->phaseModeLabel($new));
                 }
                 break;
             }
@@ -74,7 +77,8 @@ trait MqttHandlersTrait
                 $old = (int)@GetValue(@$this->GetIDForIdent('FRC'));
                 if ($old !== $new) {
                     $this->SetValueSafe('FRC', $new);
-                    $this->dbgChanged('FRC' . $this->dbgCtx($topic), $this->frcLabel($old), $this->frcLabel($new));
+                    $this->WriteAttributeInteger('LastFrcChangeMs', (int)(microtime(true)*1000)); // Schaltzeit merken
+                    $this->dbgChanged('FRC @'.$topic, $this->frcLabel($old), $this->frcLabel($new));
                 }
                 break;
             }
@@ -85,7 +89,7 @@ trait MqttHandlersTrait
                 $old = (int)@GetValue(@$this->GetIDForIdent('CarState'));
                 if ($old !== $new) {
                     $this->SetValueSafe('CarState', $new);
-                    $this->dbgChanged('CarState' . $this->dbgCtx($topic), $this->carStateLabel($old), $this->carStateLabel($new));
+                    $this->dbgChanged('CarState @'.$topic, $this->carStateLabel($old), $this->carStateLabel($new));
                 }
                 break;
             }
@@ -106,17 +110,20 @@ trait MqttHandlersTrait
 
                 if ($oldTs !== $ts) {
                     $this->SetValueSafe('Uhrzeit', $ts);
-                    $this->dbgLog('UTC → Uhrzeit' . $this->dbgCtx($topic), date('Y-m-d H:i:s T', $ts) . " (ts={$ts})");
+                    $this->dbgLog('UTC @'.$topic, date('Y-m-d H:i:s T', $ts) . " (ts={$ts})");
                 }
                 break;
             }
 
             case 'nrg':
             {
-                $this->dbgMqtt('nrg', $topic, $payload);
+                // eigenes NRG-Log (schaltbar)
+                $this->dbgMqtt('NRG', $topic . ' = ' . $payload);
+
                 $this->parseAndStoreNRG($payload); // setzt Leistung_W
-                // NEU:
-                $this->updateHouseNetFromInputs();
+
+                // deine bestehende Folge-Logik
+                $this->updateHouseNetFromInputs(); // oder RecalcHausverbrauchAbzWallbox(false)
                 $this->Loop();
                 break;
             }
@@ -144,6 +151,7 @@ trait MqttHandlersTrait
         }
         if ($ptotal !== null) {
             $this->SetValueSafe('Leistung_W', $ptotal);
+            $this->dbgLog('NRG→Leistung_W', (string)$ptotal.' W');
         }
     }
 }
