@@ -304,10 +304,10 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $minWB = max(0, (int)$this->ReadPropertyInteger('WBSubtractMinW'));
         $wbEff = ($wb > $minWB) ? $wb : 0;
 
-        $houseNet   = max(0, $houseTotal - $wbEff);
         $houseNet   = max(0, $houseTotal - $wbEff - max(0, $batt)); // Batterie-Laden rausrechnen
         $this->SetValueSafe('HouseNet_W', (int)round($houseNet));
-        $surplusRaw = max(0, $pv - $houseNet - max(0, $batt));
+        $surplusRaw = max(0, $pv - $houseNet);
+
 
         // -------- 1a) Glättung --------
         $alphaPermille = (int)$this->ReadPropertyInteger('SmoothAlphaPermille');
