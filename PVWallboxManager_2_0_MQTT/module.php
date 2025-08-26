@@ -454,29 +454,28 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         }
 
         // --- Sanftes Ampere-Update: 1A-Schritte, mind. 3–5s Abstand ---
-        // Status für Publish-Rate
+        // --- Sanftes Ampere-Update ---
         $lastPub = (int)$this->ReadAttributeInteger('LastPublishMs');
-        $gapMs   = (int)$this->ReadPropertyInteger('MinPublishGapMs'); // z.B. 2000
+        $gapMs   = (int)$this->ReadPropertyInteger('MinPublishGapMs');
         $lastA   = (int)$this->ReadAttributeInteger('LastAmpSet');
         $vidA    = @$this->GetIDForIdent('Ampere_A');
         $curA    = $vidA ? (int)@GetValue($vidA) : $lastA;
 
-        // Zielampere (auf Basis des GLATTEN Überschusses)
-        $effSurplus = max(0, $surplus - (int)floor($resW / 2));
+        // Für Amp-Ziel: roh statt glatt, reagiert schneller
+        $effSurplus = max(0, $surplusRaw - (int)floor($resW / 2));
         $neededA    = (int)floor($effSurplus / ($U * $ph));
         $setA       = max($minA, min($maxA, $neededA));
 
-        // Dynamik fein einstellen
         $minDeltaA = ($maxA - $minA) <= 6 ? 1 : 2;
         $minHoldMs = (int)max(3000, floor($gapMs * 1.5));
         $sincePub  = $nowMs - $lastPub;
 
-        // Rampen nur wenn Force-On aktiv ODER gerade gestartet
-        if ( ($frcCur === 2 || $startedNow) && $sincePub >= $minHoldMs && abs($setA - $curA) >= $minDeltaA ) {
-            // 1A pro Schritt
+        // Wichtig: an charging koppeln, nicht an FRC/startedNow
+        $canRamp = $charging;
+
+        if ($canRamp && $sincePub >= $minHoldMs && abs($setA - $curA) >= $minDeltaA) {
             $nextA = ($setA > $curA) ? ($curA + 1) : ($curA - 1);
             $nextA = max($minA, min($maxA, $nextA));
-
             if ($nextA !== $curA) {
                 $this->sendSet('amp', (string)$nextA);
                 if ($vidA) @SetValue($vidA, $nextA);
@@ -484,6 +483,15 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 $this->WriteAttributeInteger('LastPublishMs', $nowMs);
                 $this->dbgChanged('Ampere', $curA.' A', $nextA.' A');
             }
+        } else {
+            $this->dbgLog('Ampere', sprintf(
+                'kein Ramp: frc=%d, startedNow=%s, charging=%s, ΔA=%d, sincePub=%d/%d',
+                (int)@GetValue(@$this->GetIDForIdent('FRC')),
+                $startedNow ? 'ja' : 'nein',
+                $charging ? 'ja' : 'nein',
+                abs($setA - $curA),
+                $sincePub, $minHoldMs
+            ));
         }
     }
 
