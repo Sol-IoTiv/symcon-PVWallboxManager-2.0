@@ -243,11 +243,27 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $minA = (int)$this->ReadPropertyInteger('MinAmp');
         $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
 
-        // WB-Leistung live setzen (MQTT -> Fallback aus A*U*ph)
+        // WB-Leistung live (MQTT bevorzugt)
         $wbW = (int)round(max(0.0, (float)$this->getWBPowerW()));
+
+        // Laden aktiv?
+        $charging = false;
+        if (method_exists($this, 'isChargingActive')) {
+            $charging = (bool)$this->isChargingActive();
+        } else {
+            $frc = (int)@GetValue(@$this->GetIDForIdent('FRC')); // 2 = Start
+            $car = (int)@GetValue(@$this->GetIDForIdent('CarState'));
+            $charging = ($frc === 2) && in_array($car, [2,3,4], true);
+        }
+
+        // Fallback NUR wenn geladen wird und MQTT-Wert fehlt
         if ($wbW <= 0) {
-            $ampLive = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
-            $wbW = (int)round($ampLive * $U * max(1, $phEff));
+            if ($charging) {
+                $ampLive = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
+                $wbW = (int)round($ampLive * $U * max(1, $phEff));
+            } else {
+                $wbW = 0;
+            }
         }
         $this->SetValueSafe('Leistung_W', $wbW);
 
