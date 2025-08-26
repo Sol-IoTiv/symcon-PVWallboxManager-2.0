@@ -268,18 +268,62 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     {
         if (!(bool)@GetValue(@$this->GetIDForIdent('SlowControlActive'))) return;
         $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV, 1=Manuell, 2=Aus
-        if ($mode === 2) return; // AUS
+        if ($mode === 2) return;
 
         $nowMs   = (int)(microtime(true)*1000);
         $gapMs   = (int)$this->ReadPropertyInteger('MinPublishGapMs');
         $lastPub = (int)$this->ReadAttributeInteger('LastPublishMs');
         if ($nowMs - $lastPub < $gapMs) return;
 
-        // Ziel
+        // Überschuss aus dem 1-Hz-Tick
+        $surplus = (int)$this->ReadAttributeInteger('SmoothSurplusW');
+
+        // Hysterese zählen
+        $startW = (int)$this->ReadPropertyInteger('StartThresholdW');
+        $stopW  = (int)$this->ReadPropertyInteger('StopThresholdW');
+        $cStart = (int)$this->ReadAttributeInteger('CntStart');
+        $cStop  = (int)$this->ReadAttributeInteger('CntStop');
+
+        if ($surplus >= $startW) { $cStart++; $cStop = 0; }
+        elseif ($surplus <= $stopW) { $cStop++; $cStart = 0; }
+        else { $cStart = 0; $cStop = 0; }
+
+        $this->WriteAttributeInteger('CntStart', $cStart);
+        $this->WriteAttributeInteger('CntStop',  $cStop);
+
+        $startOk = $cStart >= (int)$this->ReadPropertyInteger('StartCycles');
+        $stopOk  = $cStop  >= (int)$this->ReadPropertyInteger('StopCycles');
+
+        // Mindestlaufzeiten für FRC
+        $lastFR  = (int)$this->ReadAttributeInteger('LastFrcChangeMs');
+        $onHold  = ($nowMs - $lastFR) < (int)$this->ReadPropertyInteger('MinOnTimeMs');
+        $offHold = ($nowMs - $lastFR) < (int)$this->ReadPropertyInteger('MinOffTimeMs');
+
+        $frcCur = (int)@GetValue(@$this->GetIDForIdent('FRC'));
+
+        // STOP bei fehlendem Überschuss
+        if ($stopOk && !$onHold && $frcCur !== 1) {
+            $this->sendSet('frc', '1');
+            $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
+            $this->dbgLog('SLOW', 'FRC=Stop (kein Überschuss)');
+            return;
+        }
+
+        // START bei ausreichend Überschuss
+        if ($startOk && !$offHold && $frcCur !== 2) {
+            $this->sendSet('frc', '2');
+            $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
+            $this->dbgLog('SLOW', 'FRC=Start (Überschuss vorhanden)');
+            // kein return: danach ggf. Amp an Ziel annähern
+        }
+
+        // Nur regeln, wenn Laden erzwungen/aktiv
+        if ((int)@GetValue(@$this->GetIDForIdent('FRC')) !== 2) return;
+
+        // Ziel-Amp aus 1-Hz-Tick
         $targetA = (int)$this->ReadAttributeInteger('Slow_LastCalcA');
         if ($targetA <= 0) return;
 
-        // Ist
         $minA = (int)$this->ReadPropertyInteger('MinAmp');
         $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
         $vidA = @$this->GetIDForIdent('Ampere_A');
@@ -287,22 +331,15 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         if ($curA <= 0) $curA = $minA;
 
         if ($targetA === $curA) return;
+
         $nextA = ($targetA > $curA) ? $curA + 1 : $curA - 1;
         $nextA = max($minA, min($maxA, $nextA));
 
-        // Senden über MQTT Trait
         $this->sendSet('amp', (string)$nextA);
         if ($vidA) @SetValue($vidA, $nextA);
         $this->WriteAttributeInteger('LastAmpSet',    $nextA);
         $this->WriteAttributeInteger('LastPublishMs', $nowMs);
-        $this->dbgLog('RAMP_SLOW', sprintf('A %d → %d (Ziel=%d)', $curA, $nextA, $targetA));
-
-        // Force-On halten
-        $frcCur = (int)@GetValue(@$this->GetIDForIdent('FRC'));
-        if ($frcCur !== 2 && $mode !== 2) {
-            $this->sendSet('frc', '2');
-            $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
-        }
+        $this->dbgLog('RAMP_SLOW', sprintf('A %d → %d (Ziel=%d, Überschuss=%dW)', $curA, $nextA, $targetA, $surplus));
     }
 
     // -------------------------
