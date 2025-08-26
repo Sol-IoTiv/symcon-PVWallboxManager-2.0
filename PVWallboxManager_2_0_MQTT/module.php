@@ -114,6 +114,10 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterAttributeInteger('LastAmpChangeMs', 0);
         $this->RegisterAttributeInteger('Slow_LastCalcA', 0);
 
+        $this->RegisterAttributeInteger('Slow_SurplusRaw', 0);
+        $this->RegisterAttributeInteger('Slow_AboveStartMs', 0);
+        $this->RegisterAttributeInteger('Slow_BelowStopMs', 0);
+
         // --- Timer ---
         $this->RegisterTimer('LOOP', 0, $this->modulePrefix().'_Loop($_IPS["TARGET"]);'); // bleibt vorhanden, aber in Slow aus
         $this->RegisterTimer('SLOW_TickUI', 0, $this->modulePrefix().'_SLOW_TickUI($_IPS["TARGET"]);');
