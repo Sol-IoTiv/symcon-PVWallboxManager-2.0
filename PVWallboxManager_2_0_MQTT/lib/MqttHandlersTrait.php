@@ -156,35 +156,40 @@ trait MqttHandlersTrait
             $this->dbgLog('NRG→Leistung_W', $ptotal.' W');
         }
 
-        // Phasen-Erkennung
-        $U = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
-        $pmDeclared = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p,2=3p
-        $phDeclared = ($pmDeclared === 2) ? 3 : 1;
+        // Effektive Phasen: bevorzugt Strom (I), Mindestschwelle 1.0 A
+        $U           = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
+        $pmDeclared  = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p, 2=3p
+        $phDeclared  = ($pmDeclared === 2) ? 3 : 1;
+        $I_THRESH_A  = 1.0;
 
-        $p1 = $arr[7]  ?? null;  $p2 = $arr[8]  ?? null;  $p3 = $arr[9]  ?? null;   // P je Phase
-        $i1 = $arr[4]  ?? null;  $i2 = $arr[5]  ?? null;  $i3 = $arr[6]  ?? null;   // I je Phase
+        $i1 = $arr[4] ?? null;  $i2 = $arr[5] ?? null;  $i3 = $arr[6] ?? null;
+        $p1 = $arr[7] ?? null;  $p2 = $arr[8] ?? null;  $p3 = $arr[9] ?? null;
 
         $phEff = 0; $via = 'declared';
-        if ($p1 !== null && $p2 !== null && $p3 !== null) {
-            $thW = (int)max(120, round($U * 0.6));
-            $phEff = (int)($p1 > $thW) + (int)($p2 > $thW) + (int)($p3 > $thW);
-            if ($phEff > 0) $via = 'P';
-        }
-        if ($phEff === 0 && $i1 !== null && $i2 !== null && $i3 !== null) {
-            $phEff = (int)($i1 > 1.0) + (int)($i2 > 1.0) + (int)($i3 > 1.0);
-            if ($phEff > 0) $via = 'I';
+
+        // 1) Über Strom (präferiert)
+        if ($i1 !== null && $i2 !== null && $i3 !== null) {
+            $phEff = (int)((float)$i1 >= $I_THRESH_A) + (int)((float)$i2 >= $I_THRESH_A) + (int)((float)$i3 >= $I_THRESH_A);
+            if ($phEff > 0) $via = 'I>=3A';
         }
 
-        if ($phEff <= 0) $phEff = $phDeclared;
-        if ($phDeclared === 1) $phEff = 1;
+        // 2) Fallback über Leistung je Phase ~ (≈ U * 1A * Faktor)
+        if ($phEff === 0 && $p1 !== null && $p2 !== null && $p3 !== null) {
+            $thW = (int)round($U * $I_THRESH_A * 0.9); // ~207 W bei 230 V
+            $phEff = (int)((float)$p1 >= $thW) + (int)((float)$p2 >= $thW) + (int)((float)$p3 >= $thW);
+            if ($phEff > 0) $via = 'P≈U*1A';
+        }
+
+        if ($phEff <= 0) $phEff = $phDeclared; // letzter Fallback
+        if ($phDeclared === 1) $phEff = 1;     // Kontaktor 1p begrenzt
         $phEff = min(3, max(1, $phEff));
 
         $this->WriteAttributeInteger('WB_ActivePhases', $phEff);
         $this->dbgLog('NRG→Phasen', sprintf(
-            'phEff=%d via=%s | P1=%.1fW P2=%.1fW P3=%.1fW | I1=%.2fA I2=%.2fA I3=%.2fA',
+            'phEff=%d via=%s | I1=%.2fA I2=%.2fA I3=%.2fA | P1=%.1fW P2=%.1fW P3=%.1fW',
             $phEff, $via,
-            (float)$p1, (float)$p2, (float)$p3,
-            (float)$i1, (float)$i2, (float)$i3
+            (float)$i1, (float)$i2, (float)$i3,
+            (float)$p1, (float)$p2, (float)$p3
         ));
     }
 
