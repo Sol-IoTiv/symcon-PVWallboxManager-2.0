@@ -373,22 +373,41 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     public function RecalcHausverbrauchAbzWallbox(bool $withLog = true): void
     {
         $houseTotal = $this->readVarWUnit('VarHouse_ID','VarHouse_Unit');
-        $wbRaw      = max(0, $this->getWBPowerW());
-        $minWB      = max(0, (int)$this->ReadPropertyInteger('WBSubtractMinW'));
+
+        // Ladezustand/FRC prüfen
+        $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));          // 1=Stop, 2=Start
+        $car = (int)@GetValue(@$this->GetIDForIdent('CarState'));     // go-e CarState
+        $charging = method_exists($this, 'isChargingActive')
+            ? (bool)$this->isChargingActive()
+            : in_array($car, [2,3,4], true); // 2..4 = lädt/verbunden aktiv
+
+        // WB-Leistung bevorzugt aus Live-Variable, sonst Trait
+        $wbLiveId = @$this->GetIDForIdent('Leistung_W');
+        $wbRaw    = $wbLiveId ? (float)@GetValue($wbLiveId) : (float)$this->getWBPowerW();
+        $wbRaw    = max(0.0, $wbRaw);
+
+        // Falls nicht Laden aktiv ODER FRC!=Start → WB=0 und Filter zurücksetzen
+        if (!$charging || $frc !== 2) {
+            $wbRaw = 0.0;
+            $this->WriteAttributeInteger('WB_W_Smooth', 0);
+            $this->WriteAttributeInteger('WB_SubtractActive', 0);
+        }
+
+        $minWB = max(0, (int)$this->ReadPropertyInteger('WBSubtractMinW'));
 
         $batt = $this->readVarWUnit('VarBattery_ID','VarBattery_Unit');
         if (!$this->ReadPropertyBoolean('BatteryPositiveIsCharge')) { $batt = -$batt; }
 
-        // WB Glättung (EMA)
-        $alphaWB   = 0.4;
-        $wbPrev    = (int)$this->ReadAttributeInteger('WB_W_Smooth');
-        if ($wbPrev <= 0) { $wbPrev = (int)round((float)$wbRaw); }
-        $wbSmooth  = (int)round($alphaWB * (float)$wbRaw + (1.0 - $alphaWB) * (float)$wbPrev);
+        // --- WB Glättung (EMA) ---
+        $alphaWB = 0.4;
+        $wbPrev  = (int)$this->ReadAttributeInteger('WB_W_Smooth');
+        if ($wbPrev <= 0) { $wbPrev = (int)round($wbRaw); }
+        $wbSmooth = (int)round($alphaWB * $wbRaw + (1.0 - $alphaWB) * $wbPrev);
         $this->WriteAttributeInteger('WB_W_Smooth', $wbSmooth);
 
-        // On/Off-Hysterese um Schwelle
-        $onW   = $minWB;           // aktivieren
-        $offW  = (int)max(0,$minWB - 120); // deaktivieren
+        // --- Hysterese für "WB abziehen?" ---
+        $onW = $minWB;
+        $offW = (int)max(0, $minWB - 120);
         $active = (int)$this->ReadAttributeInteger('WB_SubtractActive') === 1;
         $lastChg= (int)$this->ReadAttributeInteger('WB_SubtractChangedMs');
         $nowMs  = (int)(microtime(true)*1000);
@@ -402,9 +421,12 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->WriteAttributeInteger('WB_SubtractActive', $active ? 1 : 0);
 
         $wbEff    = $active ? $wbSmooth : 0;
+
+        // Haus ohne WB und ohne Batterie-Laden
         $houseNet = max(0, (int)round($houseTotal - $wbEff - max(0, $batt)));
         $this->SetValueSafe('HouseNet_W', $houseNet);
 
+        // (Optional) Kompat-Var
         if ($vid = @$this->GetIDForIdent('Hausverbrauch_abz_Wallbox')) { @SetValue($vid, $houseNet); }
 
         if ($withLog) {
