@@ -370,6 +370,11 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             return;
         }
 
+        $phEff = (int)$this->ReadAttributeInteger('PhasesEffective');
+        if ($phEff < 1 || $phEff > 3) {
+            $phEff = ($pm === 2) ? 3 : 1; // Fallback
+        }
+
         // -------- 5) Start/Stop + Ampere --------
         $U      = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
         [$minA, $maxA] = $this->ampRange();
@@ -390,12 +395,11 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $minP1 = $minA * $U * 1 + $resW;
         $minP2 = $minA * $U * 2 + $resW;
         $minP3 = $minA * $U * 3 + $resW;
-        $minP  = ($ph === 3) ? $minP3 : (($ph === 2) ? $minP2 : $minP1);
-
+        $minP = $minA * $U * $phEff + $resW;
         $this->dbgLog('StartCheck', sprintf(
             'car=%d connected=%s charging=%s pm=%d phEff=%d startOk=%d stopOk=%d offHold=%s onHold=%s surplus=%dW minP(%dp)=%dW',
-            $car, $connected?'ja':'nein', $charging?'ja':'nein', $pm, $ph, $startOk, $stopOk,
-            $offHold?'Warte':'ok', $onHold?'Warte':'ok', $surplus, $ph, $minP
+            $car, $connected?'ja':'nein', $charging?'ja':'nein', $pm, $phEff, $startOk, $stopOk,
+            $offHold?'Warte':'ok', $onHold?'Warte':'ok', $surplus, $phEff, $minP
         ));
 
         // 3ph→1ph für Start, wenn eff. Phasen nicht reichen, 1p aber reicht
@@ -452,7 +456,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         // schneller reagieren: roh als Basis
         $effSurplus = max(0, $surplusRaw - (int)floor($resW / 2));
-        $neededA    = (int)floor($effSurplus / ($U * $ph));
+        $neededA    = (int)floor($effSurplus / ($U * max(1, $phEff)));
         $setA       = max($minA, min($maxA, $neededA));
 
         $minDeltaA = ($maxA - $minA) <= 6 ? 1 : 2;
