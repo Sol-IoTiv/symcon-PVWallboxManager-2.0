@@ -1,675 +1,384 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/lib/Profiles.php';
-require_once __DIR__ . '/lib/Helpers.php';
-require_once __DIR__ . '/lib/Communication/MqttClientTrait.php';
-require_once __DIR__ . '/lib/MqttHandlersTrait.php';
+/**
+ * PVWMSlowControl
+ *
+ * Einfache, robuste Regelung:
+ * - Anzeige: live jede Sekunde (nur berechnen/anzeigen, nichts schalten)
+ * - Regelung: alle X Sekunden (10–30) ±1 A in Richtung Ziel
+ * - Keine FRC-Umschaltungen. Erwartet, dass die WB bereits ladebereit ist (z. B. "Manuell").
+ * - Ziel aus Netzfluss (Bezug>0, Einspeisung<0) ODER aus direkter Überschuss-Variable
+ *
+ * Minimal-Abhängigkeit: optional GOeCharger_SetCurrentChargingWatt(InstanzID, Watt)
+ */
 
-class PVWallboxManager_2_0_MQTT extends IPSModule
+class PVWMSlowControl extends IPSModule
 {
-    use Profiles;
-    use Helpers;
-    use MqttClientTrait;     // Attach, Subscribe, Publish, sendSet()
-    use MqttHandlersTrait;   // ReceiveData + Parsing/Abfragen
-
+    // -------------------------
+    // Lifecycle
+    // -------------------------
     public function Create()
     {
         parent::Create();
-        
-        // Property: Debug an/aus
-        $this->RegisterPropertyBoolean('DebugPVWM', false); // allgemeine Modul-Logs
-        $this->RegisterPropertyBoolean('DebugMQTT', false); // rohe MQTT-Topics/Payloads
 
-        // --- Properties & Auto-Modus ---
-        $this->RegisterPropertyString('BaseTopic', '');            // leer => Auto
-        $this->RegisterAttributeString('AutoBaseTopic', '');       // erkannter Stamm
-        $this->RegisterPropertyString('DeviceIDFilter', '');       // z.B. "285450", leer = kein Filter
+        // --- MQTT (optional) ---
+        $this->RegisterPropertyBoolean('UseMQTT', false);
+        $this->RegisterPropertyString('MQTTBaseTopic', '');        // z. B. 'home/energy' oder 'go-eCharger/285450'
+        $this->RegisterPropertyString('MQTTGridSuffix', 'grid');   // Topic: <Base>/<Suffix>
+        $this->RegisterPropertyString('MQTTSurplusSuffix', 'surplus');
 
-        // --- Energiequellen (Variablen + Einheit W/kW) ---
-        $this->RegisterPropertyInteger('VarPV_ID', 0);
-        $this->RegisterPropertyString('VarPV_Unit', 'W');     // 'W' | 'kW'
+        // Puffer für MQTT-Werte
+        $this->RegisterAttributeString('MQTT_GRID_W', '');
+        $this->RegisterAttributeInteger('MQTT_GRID_TS', 0);
+        $this->RegisterAttributeString('MQTT_SURPLUS_W', '');
+        $this->RegisterAttributeInteger('MQTT_SURPLUS_TS', 0);
 
-        $this->RegisterPropertyInteger('VarHouse_ID', 0);
-        $this->RegisterPropertyString('VarHouse_Unit', 'W');  // 'W' | 'kW'
+        // INPUT-Auswahl
+        // inputMode: 'grid' | 'surplus' | 'grid_mqtt' | 'surplus_mqtt'
+        $this->RegisterPropertyString('InputMode', 'grid');
+        $this->RegisterPropertyInteger('VarGrid_ID', 0);       // Netzfluss: Bezug +, Einspeisung -
+        $this->RegisterPropertyInteger('VarSurplus_ID', 0);    // direkter PV-Überschuss (W)
 
-        $this->RegisterPropertyInteger('VarBattery_ID', 0);   // optional
-        $this->RegisterPropertyString('VarBattery_Unit', 'W');// 'W' | 'kW'
-        $this->RegisterPropertyBoolean('BatteryPositiveIsCharge', true); // + = Laden
-
-        // --- Start/Stop-Hysterese (Watt + Zyklen) ---
-        $this->RegisterPropertyInteger('StartThresholdW', 1400);
-        $this->RegisterPropertyInteger('StopThresholdW', 1100);
-        $this->RegisterPropertyInteger('StartCycles', 3);
-        $this->RegisterPropertyInteger('StopCycles', 3);
-
-        // --- Phasenumschaltung (Watt + Zyklen) ---
-        $this->RegisterPropertyInteger('ThresTo1p_W', 3680);  // runter auf 1-ph
-        $this->RegisterPropertyInteger('To1pCycles', 3);
-        $this->RegisterPropertyInteger('ThresTo3p_W', 4140);  // hoch auf 3-ph
-        $this->RegisterPropertyInteger('To3pCycles', 3);
-
-        // --- Netz-/Strom-Parameter & Loop-Settings ---
+        // WALLBOX / Physik
+        $this->RegisterPropertyInteger('GoEInstanceID', 0);    // go-e Instanz (optional)
+        $this->RegisterPropertyInteger('FixedPhases', 1);      // 1 oder 3 (einfacher Betrieb)
+        $this->RegisterPropertyInteger('Voltage', 230);        // Nennspannung
         $this->RegisterPropertyInteger('MinAmp', 6);
-        $this->RegisterPropertyInteger('MaxAmp', 16);         // ggf. 32 je nach Box
-        $this->RegisterPropertyInteger('NominalVolt', 230);   // pro Phase
-        $this->RegisterPropertyInteger('MinHoldAfterPhaseMs', 30000); // Sperrzeit nach psm-Wechsel
-        $this->RegisterPropertyInteger('MinPublishGapMs', 2000);      // Mindestabstand amp/set
-        $this->RegisterPropertyInteger('WBSubtractMinW', 100);
+        $this->RegisterPropertyInteger('MaxAmpPerPhase', 16);
+        $this->RegisterPropertyString('ControlVia', 'mqtt'); // Default jetzt MQTT // 'http' | 'mqtt'
 
-        //// Start-Reserve in Watt (Sicherheitsmarge über MinAmp)
-        $this->RegisterPropertyInteger('StartReserveW', 200); // z.B. 200W
+        // Regel-Intervalle und Schwellen
+        $this->RegisterPropertyInteger('ControlIntervalSec', 15); // 10..30 s
+        $this->RegisterPropertyInteger('StartExportW', 300);       // Start ab mind. 300 W Export
+        $this->RegisterPropertyInteger('StopImportW', 200);        // Stop bei Import > 200 W
 
-        //// Mindest-Laufzeiten für FRC (Start/Stop)
-        $this->RegisterPropertyInteger('MinOnTimeMs',  60000); // 60s nach Start nicht wieder stoppen
-        $this->RegisterPropertyInteger('MinOffTimeMs', 15000); // 15s nach Stop nicht gleich wieder starten
+        // UI-Timer (1 s) und Control-Timer (X s) via RequestAction triggern
+        $this->RegisterTimer('PVWMSC_TickUI', 0, 'IPS_RequestAction($_IPS["TARGET"], "DoTickUI", 0);');
+        $this->RegisterTimer('PVWMSC_TickControl', 0, 'IPS_RequestAction($_IPS["TARGET"], "DoTickControl", 0);');
 
-        //// Zeitpunkt letzte FRC-Änderung
-        $this->RegisterAttributeInteger('LastFrcChangeMs', 0);
-        $this->RegisterAttributeString('MQTT_BUF', '{}');
+        // Variablen
+        $this->RegisterVariableBoolean('ControlActive', 'Regelung aktiv', '~Switch', 10);
+        $this->EnableAction('ControlActive');
 
-        $this->RegisterAttributeInteger('WB_ActivePhases', 1);
-        $this->RegisterAttributeInteger('WB_W_Smooth', 0);
-        $this->RegisterAttributeInteger('WB_SubtractActive', 0);
-        $this->RegisterAttributeInteger('WB_SubtractChangedMs', 0);
+        $this->RegisterVariableInteger('TargetA_Live', 'Ziel Ampere (live)', '', 20);
+        $this->RegisterVariableInteger('TargetW_Live', 'Zielleistung (live)', '~Watt', 21);
+        $this->RegisterVariableFloat('Grid_W', 'Netzfluss [W]', '~Watt', 22);
+        $this->RegisterVariableFloat('Export_W', 'Einspeisung [+W]', '~Watt', 23);
+        $this->RegisterVariableFloat('Import_W', 'Bezug [+W]', '~Watt', 24);
 
-        // Profile sicherstellen
-        $this->ensureProfiles();
+        // Attribute: intern
+        $this->RegisterAttributeInteger('LastSetAmp', 0);
+        $this->RegisterAttributeInteger('LastAmpSendMs', 0);
+        $this->RegisterAttributeInteger('LastCalcTargetA', 0);    // go-e Instanz (optional)
+        $this->RegisterPropertyInteger('FixedPhases', 1);      // 1 oder 3 (einfacher Betrieb)
+        $this->RegisterPropertyInteger('Voltage', 230);        // Nennspannung
+        $this->RegisterPropertyInteger('MinAmp', 6);
+        $this->RegisterPropertyInteger('MaxAmpPerPhase', 16);
 
-        // Kern-Variablen
-        $this->RegisterVariableInteger('Mode', 'Lademodus', 'PVWM.Mode', 5);
-        $this->EnableAction('Mode');
-        
-        $this->RegisterVariableInteger('Ampere_A',    'Ampere [A]',        'GoE.Amp',        10);
-        $this->EnableAction('Ampere_A');
+        // Regel-Intervalle und Schwellen
+        $this->RegisterPropertyInteger('ControlIntervalSec', 15); // 10..30 s
+        $this->RegisterPropertyInteger('StartExportW', 300);       // Start ab mind. 300 W Export
+        $this->RegisterPropertyInteger('StopImportW', 200);        // Stop bei Import > 200 W
 
-        $this->RegisterVariableInteger('Leistung_W',  'Leistung [W]',      '~Watt',          20);
-        $this->RegisterVariableInteger('HouseNet_W',  'Hausverbrauch (ohne WB) [W]', '~Watt', 21);
+        // UI-Timer (1 s) und Control-Timer (X s) via RequestAction triggern
+        $this->RegisterTimer('PVWMSC_TickUI', 0, 'IPS_RequestAction($_IPS["TARGET"], "DoTickUI", 0);');
+        $this->RegisterTimer('PVWMSC_TickControl', 0, 'IPS_RequestAction($_IPS["TARGET"], "DoTickControl", 0);');
 
-        $this->RegisterVariableInteger('CarState',    'Fahrzeugstatus',    'GoE.CarState',   25);
+        // Variablen
+        $this->RegisterVariableBoolean('ControlActive', 'Regelung aktiv', '~Switch', 10);
+        $this->EnableAction('ControlActive');
 
-        $this->RegisterVariableInteger('FRC',         'Force State (FRC)', 'GoE.ForceState', 50);
-        $this->EnableAction('FRC');
+        $this->RegisterVariableInteger('TargetA_Live', 'Ziel Ampere (live)', '', 20);
+        $this->RegisterVariableInteger('TargetW_Live', 'Zielleistung (live)', '~Watt', 21);
+        $this->RegisterVariableFloat('Grid_W', 'Netzfluss [W]', '~Watt', 22);
+        $this->RegisterVariableFloat('Export_W', 'Einspeisung [+W]', '~Watt', 23);
+        $this->RegisterVariableFloat('Import_W', 'Bezug [+W]', '~Watt', 24);
 
-        $this->RegisterVariableInteger('Phasenmodus', 'Phasenmodus',       'GoE.PhaseMode',  60);
-        $this->EnableAction('Phasenmodus');
-
-        $this->RegisterVariableInteger('Uhrzeit',     'Uhrzeit',            '~UnixTimestamp', 70);
-
-        // --- interne Zähler/Status (Attribute) ---
-        $this->RegisterAttributeInteger('CntStart', 0);
-        $this->RegisterAttributeInteger('CntStop', 0);
-        $this->RegisterAttributeInteger('CntTo1p', 0);
-        $this->RegisterAttributeInteger('CntTo3p', 0);
-        $this->RegisterAttributeInteger('LastAmpSet', 0);
-        $this->RegisterAttributeInteger('LastPublishMs', 0);
-        $this->RegisterAttributeInteger('LastPhaseMode', 0);     // 1/2
-        $this->RegisterAttributeInteger('LastPhaseSwitchMs', 0);
-
-
-        // --- Smoothing & Ramping ---
-        $this->RegisterPropertyInteger('SmoothAlphaPermille', 300);  // 0..1000 → 0.3 = smooth, 0 = aus
-        $this->RegisterPropertyInteger('RampHoldMs', 3000);          // min. Abstand zw. Amp-Schritten
-        $this->RegisterPropertyInteger('RampStepA', 1);              // 1 A pro Schritt
-        $this->RegisterAttributeInteger('SmoothSurplusW', 0);
-        $this->RegisterAttributeInteger('LastAmpChangeMs', 0);
-
-
-        // --- Timer für Control-Loop ---
-        $this->RegisterTimer('LOOP', 0, $this->modulePrefix()."_Loop(\$_IPS['TARGET']);");
-
-        // (Für späteres WebFront-Preview)
-        // $this->RegisterVariableString('Preview', 'Wallbox-Preview', '~HTMLBox', 100);
+        // Attribute: intern
+        $this->RegisterAttributeInteger('LastSetAmp', 0);
+        $this->RegisterAttributeInteger('LastAmpSendMs', 0);
+        $this->RegisterAttributeInteger('LastCalcTargetA', 0);
     }
 
     public function ApplyChanges()
     {
         parent::ApplyChanges();
 
-        // --- GoE.Amp-Profil an Properties anpassen ---
-        [$minA, $maxA] = $this->ampRange();
-        if (IPS_VariableProfileExists('GoE.Amp')) {
-            IPS_SetVariableProfileValues('GoE.Amp', $minA, $maxA, 1);
-            IPS_SetVariableProfileText('GoE.Amp', '', ' A');
-        }
-        if ($vidAmp = @$this->GetIDForIdent('Ampere_A')) {
-            $cur = (int)@GetValue($vidAmp);
-            $clamped = min($maxA, max($minA, $cur));
-            if ($cur !== $clamped) { @SetValue($vidAmp, $clamped); }
+        // MQTT Parent verbinden, falls genutzt
+        if ((bool)$this->ReadPropertyBoolean('UseMQTT')) {
+            @ $this->ConnectParent(self::MQTT_RX);
         }
 
-        // --- MQTT attach + Subscribe ---
-        if (!$this->attachAndSubscribe()) {
-            // Watchdog aus, Status Fehler
-            $this->SetTimerInterval('LOOP', 0);
-            $this->SetStatus(IS_EBASE + 2);
-            return;
-        }
-
-        [$min,$max] = $this->ampRange();
-        $this->sendSet('ama', (string)$max);
-        $this->sendSet('amx', (string)$max);
-
-        // --- alte Referenzen/Messages aufräumen ---
-        $refs = @IPS_GetInstance($this->InstanceID)['References'] ?? [];
-        if (is_array($refs)) {
-            foreach ($refs as $rid) {
-                @ $this->UnregisterMessage($rid, VM_UPDATE);
-                @ $this->UnregisterReference($rid);
-            }
-        }
-
-        // --- auf Änderungen reagieren: Haus-Gesamt (Modbus) & eigene WB-Leistung ---
-        $houseId = (int)$this->ReadPropertyInteger('VarHouse_ID');
-        if ($houseId > 0 && @IPS_VariableExists($houseId)) {
-            @ $this->RegisterMessage($houseId, VM_UPDATE);
-            @ $this->RegisterReference($houseId);
-        }
-        if ($wbVid = @$this->GetIDForIdent('Leistung_W')) {
-            @ $this->RegisterMessage($wbVid, VM_UPDATE);
-            // keine Reference nötig – eigene Variable
-        }
-
-        // --- LOOP-Timer Skript aktualisieren + deaktivieren ---
-        $wantedScript = $this->modulePrefix() . '_Loop($_IPS[\'TARGET\']);';
-        $eid = @IPS_GetObjectIDByIdent('LOOP', $this->InstanceID);
-        if ($eid) {
-            @IPS_SetEventScript($eid, $wantedScript);
-        }
-        $this->SetTimerInterval('LOOP', 0);
-
-        // --- Initial: HausNet berechnen & einmal regeln ---
-        $this->RecalcHausverbrauchAbzWallbox(true);
-        $this->Loop();
-
-        $this->SetStatus(IS_ACTIVE);
+        $ctrl = max(10, min(30, (int)$this->ReadPropertyInteger('ControlIntervalSec')));
+        $this->SetTimerInterval('PVWMSC_TickUI', 1000);              // Anzeige 1 s
+        $this->SetTimerInterval('PVWMSC_TickControl', $ctrl * 1000); // Regelung selten
     }
 
-    public function MessageSink($TimeStamp, $SenderID, $Message, $Data)
-    {
-        if ($Message !== VM_UPDATE) return;
-
-        $houseId = (int)$this->ReadPropertyInteger('VarHouse_ID');
-        $wbVid   = @$this->GetIDForIdent('Leistung_W');
-
-        if ($SenderID === $houseId || $SenderID === $wbVid) {
-            $this->dbgLog('HN-Trigger', "VM_UPDATE von {$SenderID}");
-            $this->RecalcHausverbrauchAbzWallbox(true);
-            // optional: $this->Loop();  // wenn du direkt danach regeln willst
-        }
-    }
-
-    // -------- Actions (WebFront) --------
+    // -------------------------
+    // RequestAction (UI, Timer)
+    // -------------------------
     public function RequestAction($Ident, $Value)
     {
         switch ($Ident) {
-            case 'Mode':
-                $mode = in_array((int)$Value, [0,1,2], true) ? (int)$Value : 0;
-                $this->SetValueSafe('Mode', $mode);
-                // sofort anwenden
-                $this->Loop();
-                break;
-
-            case 'Ampere_A':
-                $this->setCurrentLimitA((int)$Value);
-                break;
-
-            case 'Phasenmodus':
-                $pm = ((int)$Value === 2) ? 2 : 1;
-                $this->sendSet('psm', (string)$pm);
-                $this->SetValueSafe('Phasenmodus', $pm);
-                break;
-
-            case 'FRC':
-                $frc = in_array((int)$Value, [0,1,2], true) ? (int)$Value : 0;
-                $this->sendSet('frc', (string)$frc);
-                $this->SetValueSafe('FRC', $frc);
-                break;
+            case 'ControlActive':
+                $this->SetValue('ControlActive', (bool)$Value);
+                return;
+            case 'DoTickUI':
+                $this->TickUI();
+                return;
+            case 'DoTickControl':
+                $this->TickControl();
+                return;
         }
     }
 
-    // -------- Control-Loop --------
-    public function Loop(): void
+    // -------------------------
+    // 1) Anzeige tickt jede Sekunde: nur berechnen, anzeigen, nichts schalten
+    // -------------------------
+    public function TickUI(): void
     {
-        // --- Lademodus prüfen ---
-        $this->SetTimerInterval('LOOP', 0);
-        $mode  = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV, 1=Manuell, 2=Aus
-        $nowMs = (int)(microtime(true) * 1000);
-        $lastFR = $this->lastFrcChangeMs();
+        [$gridW, $exportW, $importW] = $this->readGridTuple();
+        $this->SetValueSafe('Grid_W', (float)$gridW);
+        $this->SetValueSafe('Export_W', (float)$exportW);
+        $this->SetValueSafe('Import_W', (float)$importW);
 
-        // MQTT-Buffer lesen
-        $nrg = $this->mqttBufGet('nrg', null);
-        if ($nrg !== null) {
-            try { $this->parseAndStoreNRG($nrg); } catch (\Throwable $e) { $this->dbgLog('NRG', 'Parse-Fehler: '.$e->getMessage()); }
+        $surplusW = $this->readSurplusW($gridW); // aus Grid oder direkter Überschuss-Variable
+
+        $ph = ($this->ReadPropertyInteger('FixedPhases') === 3) ? 3 : 1;
+        $u  = max(200, (int)$this->ReadPropertyInteger('Voltage'));
+        $aMin = (int)$this->ReadPropertyInteger('MinAmp');
+        $aMax = (int)$this->ReadPropertyInteger('MaxAmpPerPhase');
+
+        $targetW = max(0, (int)$surplusW);
+        $targetA = (int)ceil($targetW / ($u * $ph));
+        $targetA = max($aMin, min($targetA, $aMax));
+
+        $this->SetValueSafe('TargetW_Live', $targetW);
+        $this->SetValueSafe('TargetA_Live', $targetA);
+        $this->WriteAttributeInteger('LastCalcTargetA', $targetA);
+    }
+
+    // -------------------------
+    // 2) Regelung tickt alle X Sekunden: ±1 A in Richtung Ziel
+    // -------------------------
+    public function TickControl(): void
+    {
+        if (!(bool)@GetValue(@$this->GetIDForIdent('ControlActive'))) return;
+
+        [$gridW, $exportW, $importW] = $this->readGridTuple();
+        $startExp = max(0, (int)$this->ReadPropertyInteger('StartExportW'));
+        $stopImp  = max(0, (int)$this->ReadPropertyInteger('StopImportW'));
+
+        // Start/Stop Hysterese an Grid
+        if ($importW > $stopImp) {
+            // Import zu hoch → Amp nicht erhöhen (hier nur halten). Optional: absenken.
+            // Wir senken sanft um 1 A.
+            $this->stepAmpTowardTarget(max(0, $this->getLastSetAmp() - 1));
+            return;
         }
-
-        // AUS
-        if ($mode === 2) {
-            $frcCur = (int)@GetValue(@$this->GetIDForIdent('FRC'));
-            if ($frcCur !== 1) {
-                $this->sendSet('frc', '1');
-                $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
-                $this->dbgLog('Lademodus', 'Aus → Force-Off');
-            }
-            $this->WriteAttributeInteger('CntStart', 0);
-            $this->WriteAttributeInteger('CntStop',  0);
-            $this->WriteAttributeInteger('CntTo1p',  0);
-            $this->WriteAttributeInteger('CntTo3p',  0);
+        if ($exportW < $startExp) {
+            // kaum Überschuss → nicht erhöhen
             return;
         }
 
-        // MANUELL
-        if ($mode === 1) {
-            $holdMs   = (int)$this->ReadPropertyInteger('MinHoldAfterPhaseMs');
-            $lastSw   = (int)$this->ReadAttributeInteger('LastPhaseSwitchMs');
-            $holdOver = ($nowMs - $lastSw) >= $holdMs;
+        // Ziel aus letztem UI-Live-Wert
+        $targetA = (int)$this->ReadAttributeInteger('LastCalcTargetA');
+        if ($targetA <= 0) return;
 
-            $pmWanted = ((int)@GetValue(@$this->GetIDForIdent('Phasenmodus')) === 2) ? 2 : 1;
-            [$minA, $maxA] = $this->ampRange();
-            $aWanted = max($minA, min($maxA, (int)@GetValue(@$this->GetIDForIdent('Ampere_A'))));
+        $this->stepAmpTowardTarget($targetA);
+    }
 
-            $curPm = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus'));
-            if ($holdOver && $pmWanted !== $curPm) {
-                $this->sendSet('psm', (string)$pmWanted);
-                $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
-                $this->WriteAttributeInteger('LastPhaseMode', $pmWanted);
-            } else if (!$holdOver) {
-                $this->dbgLog('Lademodus', 'Phasenwechsel-Sperrzeit aktiv – psm bleibt vorerst');
+    // -------------------------
+    // Kern: ±1 A Schritt und setzen
+    // -------------------------
+    private function stepAmpTowardTarget(int $targetA): void
+    {
+        $aMin = (int)$this->ReadPropertyInteger('MinAmp');
+        $aMax = (int)$this->ReadPropertyInteger('MaxAmpPerPhase');
+        $targetA = max($aMin, min($targetA, $aMax));
+
+        $curA = (int)$this->ReadAttributeInteger('LastSetAmp');
+        if ($curA <= 0) $curA = $aMin;
+        if ($targetA === $curA) return;
+
+        // Rate-Limit: min ControlIntervalSec zwischen Sends reicht, Timer tickt selten
+        $nextA = ($targetA > $curA) ? $curA + 1 : $curA - 1;
+        $this->ctrlSetAmp($nextA);
+        $this->WriteAttributeInteger('LastSetAmp', $nextA);
+
+        $this->SendDebug('RAMP_SLOW', sprintf('A %d → %d (Ziel=%d)', $curA, $nextA, $targetA), 0);
+    }
+
+    // -------------------------
+    // Surplus lesen
+    // -------------------------
+    private function readSurplusW(float $gridW): int
+    {
+        $mode = strtolower(trim($this->ReadPropertyString('InputMode')));
+        $useMqtt = (bool)$this->ReadPropertyBoolean('UseMQTT');
+
+        if ($useMqtt && ($mode === 'surplus_mqtt' || $mode === 'surplus')) {
+            $s = @json_decode($this->ReadAttributeString('MQTT_SURPLUS_W'), true);
+            if (is_array($s) && isset($s['v'])) {
+                return (int)round((float)$s['v']);
             }
-
-            $lastPub = (int)$this->ReadAttributeInteger('LastPublishMs');
-            $gapMs   = (int)$this->ReadPropertyInteger('MinPublishGapMs');
-            $lastA   = (int)$this->ReadAttributeInteger('LastAmpSet');
-
-            if (($nowMs - $lastPub) >= $gapMs && $aWanted !== $lastA) {
-                $this->setCurrentLimitA($aWanted);
-                $this->dbgChanged('Ampere', $lastA.' A', $aWanted.' A');
+        }
+        if ($mode === 'surplus') {
+            $id = (int)$this->ReadPropertyInteger('VarSurplus_ID');
+            if ($id > 0 && @IPS_VariableExists($id)) {
+                return (int)round((float)@GetValue($id));
             }
-
-            $frcCur = (int)@GetValue(@$this->GetIDForIdent('FRC'));
-            if ($frcCur !== 2) {
-                $this->sendSet('frc', '2');
-                $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
-                $this->dbgLog('Lademodus', 'Manuell → Force-On');
+        }
+        if ($useMqtt && ($mode === 'grid_mqtt' || $mode === 'grid')) {
+            $g = @json_decode($this->ReadAttributeString('MQTT_GRID_W'), true);
+            if (is_array($g) && isset($g['v'])) {
+                $gridW = (float)$g['v'];
             }
-            return;
         }
-
-        // -------- 1) Eingänge --------
-        $pv         = $this->readVarWUnit('VarPV_ID',     'VarPV_Unit');
-        $houseTotal = $this->readVarWUnit('VarHouse_ID',  'VarHouse_Unit');
-        $batt       = $this->readVarWUnit('VarBattery_ID','VarBattery_Unit');
-        if (!$this->ReadPropertyBoolean('BatteryPositiveIsCharge')) $batt = -$batt;
-
-        // WB-Leistung
-        $wb    = max(0, $this->getWBPowerW());
-        $minWB = max(0, (int)$this->ReadPropertyInteger('WBSubtractMinW'));
-        $wbEff = ($wb > $minWB) ? $wb : 0;
-
-        $houseNet   = max(0, $houseTotal - $wbEff - max(0, $batt)); // Batterie-Laden rausrechnen
-        $this->SetValueSafe('HouseNet_W', (int)round($houseNet));
-        $surplusRaw = max(0, $pv - $houseNet);
-
-        // -------- 1a) Glättung --------
-        $alphaPermille = (int)$this->ReadPropertyInteger('SmoothAlphaPermille');
-        if ($alphaPermille <= 0) { $alphaPermille = 350; }
-        $alpha = min(1.0, max(0.0, $alphaPermille / 1000.0));
-        $prevSmooth = (int)$this->ReadAttributeInteger('SmoothSurplusW');
-        $surplus = (int)round($alpha * $surplusRaw + (1.0 - $alpha) * $prevSmooth);
-        $this->WriteAttributeInteger('SmoothSurplusW', $surplus);
-
-        $this->dbgLog('Bilanz', sprintf(
-            'PV=%dW, HausGes=%dW, WB=%dW (> %dW? %s), HausNet=%dW, Batt=%+dW, Überschuss roh=%dW, glatt=%dW (α=%.2f)',
-            (int)$pv, (int)$houseTotal, (int)$wb, (int)$minWB, ($wbEff>0?'ja':'nein'),
-            (int)$houseNet, (int)$batt, (int)$surplusRaw, (int)$surplus, $alpha
-        ));
-
-        // -------- 2) Zustände --------
-        $pm  = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')) ?: 1; // 1=1p, 2=3p
-        $car = (int)@GetValue(@$this->GetIDForIdent('CarState')) ?: 0;
-
-        // -------- 3) Start/Stop-Hysterese --------
-        $startW = (int)$this->ReadPropertyInteger('StartThresholdW');
-        $stopW  = (int)$this->ReadPropertyInteger('StopThresholdW');
-        $cStart = (int)$this->ReadAttributeInteger('CntStart');
-        $cStop  = (int)$this->ReadAttributeInteger('CntStop');
-
-        if ($surplus >= $startW) { $cStart++; $cStop = max(0, $cStop - 1); }
-        elseif ($surplus <= $stopW) { $cStop++;  $cStart = max(0, $cStart - 1); }
-        else { $cStart = max(0, $cStart - 1); $cStop = max(0, $cStop - 1); }
-
-        $this->WriteAttributeInteger('CntStart', $cStart);
-        $this->WriteAttributeInteger('CntStop',  $cStop);
-
-        $startOk = ($cStart >= (int)$this->ReadPropertyInteger('StartCycles'));
-        $stopOk  = ($cStop  >= (int)$this->ReadPropertyInteger('StopCycles'));
-
-        // -------- 4) Phasen-Hysterese --------
-        $to1pW = (int)$this->ReadPropertyInteger('ThresTo1p_W');
-        $to3pW = (int)$this->ReadPropertyInteger('ThresTo3p_W');
-        $c1p   = (int)$this->ReadAttributeInteger('CntTo1p');
-        $c3p   = (int)$this->ReadAttributeInteger('CntTo3p');
-
-        $c1p = ($surplus <= $to1pW) ? ($c1p + 1) : 0;
-        $c3p = ($surplus >= $to3pW) ? ($c3p + 1) : 0;
-        $this->WriteAttributeInteger('CntTo1p', $c1p);
-        $this->WriteAttributeInteger('CntTo3p', $c3p);
-
-        $holdMs   = (int)$this->ReadPropertyInteger('MinHoldAfterPhaseMs');
-        $lastSw   = (int)$this->ReadAttributeInteger('LastPhaseSwitchMs');
-        $holdOver = ($nowMs - $lastSw) >= $holdMs;
-
-        $targetPM = $pm;
-        if ($car > 0 && $holdOver) {
-            if ($pm === 2 && $c1p >= (int)$this->ReadPropertyInteger('To1pCycles')) $targetPM = 1;
-            if ($pm === 1 && $c3p >= (int)$this->ReadPropertyInteger('To3pCycles')) $targetPM = 2;
+        return (int)round(max(0.0, -$gridW));
+    }
         }
-        if ($targetPM !== $pm) {
-            $this->sendSet('psm', (string)$targetPM);
-            $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
-            $this->WriteAttributeInteger('LastPhaseMode', $targetPM);
-            $this->dbgChanged('Phasenmodus', $this->phaseModeLabel($pm), $this->phaseModeLabel($targetPM));
-            return;
-        }
+        // Default: aus Grid ableiten → Überschuss = Einspeisung als positive Zahl
+        return (int)round(max(0.0, -$gridW));
+    }
 
-        $phEff = (int)$this->ReadAttributeInteger('WB_ActivePhases');
-        if ($phEff < 1 || $phEff > 3) {
-            $phEff = ($pm === 2) ? 3 : 1; // Fallback auf deklarierten Kontaktor
-        }
-
-        // -------- 5) Start/Stop + Ampere --------
-        $U      = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
-        [$minA, $maxA] = $this->ampRange();
-        $resW   = (int)$this->ReadPropertyInteger('StartReserveW');
-
-        $onHold  = ($nowMs - $lastFR) < (int)$this->ReadPropertyInteger('MinOnTimeMs');
-        $offHold = ($nowMs - $lastFR) < (int)$this->ReadPropertyInteger('MinOffTimeMs');
-
-        $connected = in_array($car, [1,2,3,4], true);
-        $charging  = $this->isChargingActive();
-
-        // dynamische Mindestleistungen
-        $minP_eff = $minA * $U * $phEff + $resW;   // effektive Mindestleistung
-        $minP_1p  = $minA * $U * 1      + $resW;   // 1-ph Referenz
-        $this->dbgLog('StartCheck', sprintf(
-            'car=%d connected=%s charging=%s pm=%d phEff=%d startOk=%d stopOk=%d offHold=%s onHold=%s surplus=%dW minP_eff=%dW',
-            $car, $connected?'ja':'nein', $charging?'ja':'nein', $pm, $phEff, $startOk, $stopOk,
-            $offHold?'Warte':'ok', $onHold?'Warte':'ok', $surplus, $minP_eff
-        ));
-
-        // 3p → 1p Starthilfe:
-        if ($connected && !$charging && $pm === 2 && $holdOver && $surplus < $minP_eff && $surplus >= $minP_1p) {
-            $this->sendSet('psm', '1');
-            $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
-            $this->WriteAttributeInteger('LastPhaseMode', 1);
-            return;
-        }
-
-        $frcCur = (int)@GetValue(@$this->GetIDForIdent('FRC'));
-        if (!$connected) {
-            if ($frcCur !== 1) {
-                $this->sendSet('frc', '1');
-                $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
-                $this->dbgLog('Ladung', 'Stop (kein Fahrzeug)');
+    // Grid-Tuple: [grid, export+, import+]
+    private function readGridTuple(): array
+    {
+        $grid = 0.0;
+        $useMqtt = (bool)$this->ReadPropertyBoolean('UseMQTT');
+        if ($useMqtt) {
+            $g = @json_decode($this->ReadAttributeString('MQTT_GRID_W'), true);
+            if (is_array($g) && isset($g['v'])) {
+                $grid = (float)$g['v'];
             }
-            $this->WriteAttributeInteger('CntStart', 0);
-            $this->WriteAttributeInteger('CntStop',  0);
-            $this->WriteAttributeInteger('CntTo1p',  0);
-            $this->WriteAttributeInteger('CntTo3p',  0);
-            return;
         }
-
-        $startedNow = false;
-
-        // STOP
-        if ($charging && $stopOk && !$onHold) {
-            $this->sendSet('frc', '1');
-            $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
-            $this->WriteAttributeInteger('CntStart', 0);
-            $this->WriteAttributeInteger('CntStop',  0);
-            $this->dbgLog('Ladung', 'Stop (Stop-Hysterese erreicht)');
-            return;
-        }
-
-        // START
-        if (!$charging && $connected && $startOk && !$offHold && $surplus >= $minP_eff) {
-            $this->sendSet('frc', '2');
-            $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
-            $this->WriteAttributeInteger('CntStart', 0);
-            $this->WriteAttributeInteger('CntStop',  0);
-            $this->dbgLog('Ladung', 'Start (Hysterese & Reserve erfüllt, eff. Phasen='.$phEff.')');
-            $startedNow = true;
-        }
-
-        // --- Sanftes Ampere-Update mit Leistungs-Feedback ---
-        $lastPub   = (int)$this->ReadAttributeInteger('LastPublishMs');
-        $gapMs     = (int)$this->ReadPropertyInteger('MinPublishGapMs');
-        $minHoldMs = (int)max(3000, floor($gapMs * 1.5));
-        $sincePub  = $nowMs - $lastPub;
-
-        $vidA  = @$this->GetIDForIdent('Ampere_A');
-        $curA  = $vidA ? (int)@GetValue($vidA) : (int)$this->ReadAttributeInteger('LastAmpSet');
-
-        $targetW = max(0, $surplusRaw - $resW);   // frei nutzbarer Headroom für die WB
-        $errorW  = $targetW - $wb;                // was die WB noch "nachziehen" soll
-        $step    = ($errorW > 0) ? 1 : -1;        // 1A rauf/runter
-        $threshW = $U * max(1, $phEff);           // eine Ampere-Stufe in Watt
-
-        if ($charging && $sincePub >= $minHoldMs && abs($errorW) >= $threshW) {
-            $nextA = max($minA, min($maxA, $curA + $step));
-            if ($nextA !== $curA) {
-                $this->setCurrentLimitA($nextA);
-                if ($vidA) @SetValue($vidA, $nextA);
-                $this->WriteAttributeInteger('LastAmpSet',    $nextA);
-                $this->WriteAttributeInteger('LastPublishMs', $nowMs);
-                $this->dbgChanged('Ampere', $curA.' A', $nextA.' A');
+        if (!$useMqtt || !is_finite($grid)) {
+            $id = (int)$this->ReadPropertyInteger('VarGrid_ID');
+            if ($id > 0 && @IPS_VariableExists($id)) {
+                $grid = (float)@GetValue($id);
             }
+        }
+        $export = max(0.0, -$grid);
+        $import = max(0.0,  $grid);
+        return [$grid, $export, $import];
+    }
+        $export = max(0.0, -$grid);
+        $import = max(0.0,  $grid);
+        return [$grid, $export, $import];
+    }
+
+    // -------------------------
+    // WB-Steuerung (Watt aus Ampere über Phasen*U)
+    // -------------------------
+    private function setCurrentLimitA(int $amp): void
+    {
+        $ph = ($this->ReadPropertyInteger('FixedPhases') === 3) ? 3 : 1;
+        $u  = max(200, (int)$this->ReadPropertyInteger('Voltage'));
+        $watts = max(0, (int)round($amp * $ph * $u));
+
+        $inst = (int)$this->ReadPropertyInteger('GoEInstanceID');
+        if ($inst > 0 && function_exists('GOeCharger_SetCurrentChargingWatt')) {
+            try { @GOeCharger_SetCurrentChargingWatt($inst, $watts); } catch (\Throwable $e) {}
         } else {
-            $this->dbgLog('Ampere', sprintf('hold: err=%dW, wb=%dW, target=%dW, A=%d, since=%d/%d',
-                (int)$errorW, (int)$wb, (int)$targetW, (int)$curA, $sincePub, $minHoldMs));
+            // Fallback: nur Debug
+            $this->SendDebug('SET', 'Kein GOeCharger_SetCurrentChargingWatt verfügbar', 0);
+        }
+    }
+    // -------------------------
+    // MQTT Receive (optional)
+    // Erwartet Parent: MQTT-Gateway/Server, liefert JSON {"Topic":"...","Payload":"..."}
+    public function ReceiveData($JSONString)
+    {
+        if (!(bool)$this->ReadPropertyBoolean('UseMQTT')) return;
+        $data = json_decode($JSONString, true);
+        if (!is_array($data) || !isset($data['Buffer'])) return;
+        $buf = json_decode($data['Buffer'], true);
+        if (!is_array($buf)) return;
+
+        $topic   = (string)($buf['Topic'] ?? '');
+        $payload = (string)($buf['Payload'] ?? '');
+        if ($topic === '') return;
+
+        $base = rtrim((string)$this->ReadPropertyString('MQTTBaseTopic'), '/');
+        if ($base !== '' && strpos($topic, $base . '/') !== 0) return;
+
+        $gridSuffix    = trim($this->ReadPropertyString('MQTTGridSuffix'));
+        $surplusSuffix = trim($this->ReadPropertyString('MQTTSurplusSuffix'));
+
+        if ($gridSuffix !== '' && substr($topic, -strlen($gridSuffix)-1) === '/' . $gridSuffix) {
+            $v = $this->parseNumericPayload($payload);
+            $this->WriteAttributeString('MQTT_GRID_W', json_encode(['v'=>$v]));
+            $this->WriteAttributeInteger('MQTT_GRID_TS', time());
+            return;
+        }
+        if ($surplusSuffix !== '' && substr($topic, -strlen($surplusSuffix)-1) === '/' . $surplusSuffix) {
+            $v = $this->parseNumericPayload($payload);
+            $this->WriteAttributeString('MQTT_SURPLUS_W', json_encode(['v'=>$v]));
+            $this->WriteAttributeInteger('MQTT_SURPLUS_TS', time());
+            return;
         }
     }
 
-    public function ApplyDetectedBaseTopic(): void
+    private function parseNumericPayload(string $p): float
     {
-        $auto = trim($this->ReadAttributeString('AutoBaseTopic'));
-        if ($auto === '') { $this->ReloadForm(); return; }
-        IPS_SetProperty($this->InstanceID, 'BaseTopic', $auto);
-        IPS_ApplyChanges($this->InstanceID);
-        $this->ReloadForm();
-    }
-
-    public function ClearDetectedBaseTopic(): void
-    {
-        $this->WriteAttributeString('AutoBaseTopic', '');
-        IPS_ApplyChanges($this->InstanceID);
-        $this->ReloadForm();
-    }
-
-    private function updateHouseNetFromInputs(): void
-    {
-        // Bewusst ohne eigenes Log – zentrale Logik sitzt jetzt in RecalcHausverbrauchAbzWallbox()
-        $this->RecalcHausverbrauchAbzWallbox(false);
-    }
-
-    /**
-     * Neu (2.0): Rechnet "Hausverbrauch abzüglich WB" mit Schwelle
-     * und schreibt HouseNet_W (und optional eine Kompatibilitäts-Variable).
-     * Batterie wird hier bewusst NICHT berücksichtigt.
-     */
-    public function RecalcHausverbrauchAbzWallbox(bool $withLog = true): void
-    {
-        $houseTotal = $this->readVarWUnit('VarHouse_ID','VarHouse_Unit');
-        $wbRaw      = max(0, $this->getWBPowerW());
-        $minWB      = max(0, (int)$this->ReadPropertyInteger('WBSubtractMinW'));
-
-        $batt = $this->readVarWUnit('VarBattery_ID','VarBattery_Unit');
-        if (!$this->ReadPropertyBoolean('BatteryPositiveIsCharge')) { $batt = -$batt; }
-
-        // --- WB Glättung (EMA) ---
-        $alphaWB   = 0.4; // dezent, keine Property nötig
-        $wbPrev    = (int)$this->ReadAttributeInteger('WB_W_Smooth');
-        if ($wbPrev <= 0) { $wbPrev = (int)round((float)$wbRaw); } // erster Lauf stabil
-        $wbSmooth = (int)round($alphaWB * (float)$wbRaw + (1.0 - $alphaWB) * (float)$wbPrev);
-        $this->WriteAttributeInteger('WB_W_Smooth', $wbSmooth);
-
-        // --- Hysterese für "WB abziehen?" (On/Off um die Min-Schwelle) ---
-        $onW   = $minWB;           // ab hier aktivieren
-        $offW  = (int)max(0,$minWB - 120); // hier wieder deaktivieren
-        $active = (int)$this->ReadAttributeInteger('WB_SubtractActive') === 1;
-        $lastChg= (int)$this->ReadAttributeInteger('WB_SubtractChangedMs');
-        $nowMs  = (int)(microtime(true)*1000);
-        $holdMs = 4000; // Wechsel- Sperrzeit
-
-        if ($active) {
-            if ($wbSmooth <= $offW && ($nowMs - $lastChg) >= $holdMs) {
-                $active = false; $this->WriteAttributeInteger('WB_SubtractChangedMs', $nowMs);
-            }
-        } else {
-            if ($wbSmooth >= $onW && ($nowMs - $lastChg) >= $holdMs) {
-                $active = true;  $this->WriteAttributeInteger('WB_SubtractChangedMs', $nowMs);
+        $p = trim($p);
+        if ($p === '') return 0.0;
+        if (is_numeric($p)) return (float)$p;
+        $j = json_decode($p, true);
+        if (is_array($j)) {
+            if (isset($j['v']) && is_numeric($j['v'])) return (float)$j['v'];
+            foreach (['value','val','w','W'] as $k) {
+                if (isset($j[$k]) && is_numeric($j[$k])) return (float)$j[$k];
             }
         }
-        $this->WriteAttributeInteger('WB_SubtractActive', $active ? 1 : 0);
-
-        // nur wenn aktiv, dann *geglättete* WB-Leistung abziehen
-        $wbEff    = $active ? $wbSmooth : 0;
-
-        // Haus ohne WB und ohne Batterie-Laden
-        $houseNet = max(0, (int)round($houseTotal - $wbEff - max(0, $batt)));
-        $this->SetValueSafe('HouseNet_W', $houseNet);
-
-        // (Optional) Kompatibilitäts-Variable, falls es sie noch gibt
-        if ($vid = @$this->GetIDForIdent('Hausverbrauch_abz_Wallbox')) {
-            @SetValue($vid, $houseNet);
-        }
-
-        // Log
-        if ($withLog) {
-            $fmt = static function (int $w): string { return number_format($w, 0, ',', '.'); };
-            $this->dbgLog('HausNet', sprintf(
-                'HausGesamt=%s W | WB raw=%s W, smooth=%s W, eff=%s W [%s] (Schwelle on=%s/off=%s) → HausNet=%s W',
-                $fmt((int)round((float)$houseTotal)),
-                $fmt((int)round((float)$wbRaw)),
-                $fmt((int)round((float)$wbSmooth)),
-                $fmt((int)round((float)$wbEff)),
-                $active ? 'aktiv' : 'inaktiv',
-                $fmt($onW),
-                $fmt($offW),
-                $fmt($houseNet)
-            ));
-        }
+        $s = preg_replace('~[^0-9\.-]+~','', $p);
+        return is_numeric($s) ? (float)$s : 0.0;
     }
-
-    /**
-     * Letzter FRC-Änderzeitpunkt in ms.
-     * Max aus Attribut (explizit gesetzt) und Zeit der FRC-Variable.
-     */
-    private function lastFrcChangeMs(): int
+    // -------------------------
+    // MQTT Publish Helpers (go-e: amp, frc, psm)
+    private function mqttPublish(string $topic, string $payload, bool $retain=false, int $qos=0): void
     {
-        $attr = (int)$this->ReadAttributeInteger('LastFrcChangeMs');
-
-        $vid = @$this->GetIDForIdent('FRC');
-        if ($vid && @IPS_VariableExists($vid)) {
-            $vi = @IPS_GetVariable($vid);
-            if (is_array($vi) && isset($vi['VariableUpdated'])) {
-                $varMs = (int)$vi['VariableUpdated'] * 1000; // s → ms
-                if ($varMs > $attr) {
-                    return $varMs;
-                }
-            }
-        }
-        return $attr;
+        $base = rtrim($this->ReadPropertyString('MQTTBaseTopic') ?: '', '/');
+        if ($base !== '' && strpos($topic, $base.'/') !== 0) $topic = $base.'/'.$topic;
+        $data = [
+            'DataID'           => self::MQTT_TX,
+            'PacketType'       => 3,
+            'QualityOfService' => $qos,
+            'Retain'           => $retain,
+            'Topic'            => $topic,
+            'Payload'          => $payload,
+        ];
+        @$this->SendDataToParent(json_encode($data));
     }
 
-    public function GetConfigurationForm()
+    private function ctrlSetAmp(int $amp): void
     {
-        $U    = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
-        $minA = (int)$this->ReadPropertyInteger('MinAmp');
-        $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
-        $thr3 = 3 * max(1, $minA) * $U;
-        $thr1 = max(1, $maxA) * $U;
-        $msHint = "⏱ 1 000 ms = 1 s · 10 000 ms = 10 s · 30 000 ms = 30 s";
-
-        return json_encode([
-            'elements' => [
-                [
-                    'type'=>'ExpansionPanel','caption'=>'🔌 Wallbox Konfiguration','items'=>[
-                        ['type'=>'ValidationTextBox','name'=>'BaseTopic','caption'=>'Base-Topic (z. B. go-eCharger/285450)'],
-                        ['type'=>'ValidationTextBox','name'=>'DeviceIDFilter','caption'=>'Device-ID Filter (optional)'],
-                        ['type'=>'RowLayout','items'=>[
-                            ['type'=>'NumberSpinner','name'=>'MinAmp','caption'=>'Min. Ampere','minimum'=>1,'maximum'=>32,'suffix'=>' A'],
-                            ['type'=>'NumberSpinner','name'=>'MaxAmp','caption'=>'Max. Ampere','minimum'=>1,'maximum'=>32,'suffix'=>' A'],
-                            ['type'=>'NumberSpinner','name'=>'NominalVolt','caption'=>'Netzspannung','minimum'=>200,'maximum'=>245,'suffix'=>' V'],
-                        ]],
-                        ['type'=>'NumberSpinner','name'=>'MinHoldAfterPhaseMs','caption'=>'Sperrzeit Phasenwechsel','suffix'=>' ms'],
-                        ['type'=>'Label','caption'=>$msHint],
-                        ['type'=>'Label','caption'=>"⚙️ Richtwerte: 3-ph Start ab ≈ {$thr3} W · 1-ph unter ≈ {$thr1} W"],
-                    ]
-                ],
-                [
-                    'type'=>'ExpansionPanel','caption'=>'⚡ Eingänge','items'=>[
-                        ['type'=>'SelectVariable','name'=>'VarPV_ID','caption'=>'PV-Leistung'],
-                        ['type'=>'SelectVariable','name'=>'VarHouse_ID','caption'=>'Haus gesamt (inkl. WB)'],
-                        ['type'=>'SelectVariable','name'=>'VarBattery_ID','caption'=>'Batterie (optional)'],
-                        ['type'=>'RowLayout','items'=>[
-                            ['type'=>'Select','name'=>'VarPV_Unit','caption'=>'PV Einheit','options'=>[
-                                ['caption'=>'W','value'=>'W'],['caption'=>'kW','value'=>'kW']]],
-                            ['type'=>'Select','name'=>'VarHouse_Unit','caption'=>'Haus Einheit','options'=>[
-                                ['caption'=>'W','value'=>'W'],['caption'=>'kW','value'=>'kW']]],
-                            ['type'=>'Select','name'=>'VarBattery_Unit','caption'=>'Batt Einheit','options'=>[
-                                ['caption'=>'W','value'=>'W'],['caption'=>'kW','value'=>'kW']]],
-                        ]],
-                        ['type'=>'CheckBox','name'=>'BatteryPositiveIsCharge','caption'=>'+ bedeutet Laden'],
-                        ['type'=>'NumberSpinner','name'=>'WBSubtractMinW','caption'=>'WB-Abzug ab','suffix'=>' W'],
-                        ['type'=>'Label','caption'=>'WB-Leistung erst ab diesem Wert vom Hausverbrauch abziehen.'],
-                        ['type'=>'NumberSpinner','name'=>'SmoothAlphaPermille','caption'=>'Glättung α · 0..1000','suffix'=>' ‰'],
-                        ['type'=>'Label','caption'=>'350 ≈ 0,35 · 0 = aus · 1000 = keine Glättung'],
-                    ]
-                ],
-                [
-                    'type'=>'ExpansionPanel','caption'=>'🧠 Regellogik','items'=>[
-                        ['type'=>'RowLayout','items'=>[
-                            ['type'=>'NumberSpinner','name'=>'StartThresholdW','caption'=>'Start-Schwelle','suffix'=>' W'],
-                            ['type'=>'NumberSpinner','name'=>'StopThresholdW','caption'=>'Stop-Schwelle','suffix'=>' W'],
-                        ]],
-                        ['type'=>'RowLayout','items'=>[
-                            ['type'=>'NumberSpinner','name'=>'StartCycles','caption'=>'Start-Zyklen','minimum'=>1,'maximum'=>20],
-                            ['type'=>'NumberSpinner','name'=>'StopCycles','caption'=>'Stop-Zyklen','minimum'=>1,'maximum'=>20],
-                        ]],
-                        ['type'=>'RowLayout','items'=>[
-                            ['type'=>'NumberSpinner','name'=>'ThresTo1p_W','caption'=>'→ 1-ph unter','suffix'=>' W'],
-                            ['type'=>'NumberSpinner','name'=>'To1pCycles','caption'=>'Zyklen','minimum'=>1,'maximum'=>20],
-                            ['type'=>'NumberSpinner','name'=>'ThresTo3p_W','caption'=>'→ 3-ph über','suffix'=>' W'],
-                            ['type'=>'NumberSpinner','name'=>'To3pCycles','caption'=>'Zyklen','minimum'=>1,'maximum'=>20],
-                        ]],
-                        ['type'=>'NumberSpinner','name'=>'StartReserveW','caption'=>'Start-Reserve','suffix'=>' W'],
-                    ]
-                ],
-                [
-                    'type'=>'ExpansionPanel','caption'=>'🔧 Ramping & Zeiten','items'=>[
-                        ['type'=>'NumberSpinner','name'=>'MinPublishGapMs','caption'=>'Mindestabstand amp/set','suffix'=>' ms'],
-                        ['type'=>'NumberSpinner','name'=>'RampHoldMs','caption'=>'Ramping-Haltezeit','suffix'=>' ms'],
-                        ['type'=>'NumberSpinner','name'=>'RampStepA','caption'=>'Ramping-Schritt','minimum'=>1,'maximum'=>5,'suffix'=>' A'],
-                        ['type'=>'RowLayout','items'=>[
-                            ['type'=>'NumberSpinner','name'=>'MinOnTimeMs','caption'=>'Min. EIN-Zeit','suffix'=>' ms'],
-                            ['type'=>'NumberSpinner','name'=>'MinOffTimeMs','caption'=>'Min. AUS-Zeit','suffix'=>' ms'],
-                        ]],
-                        ['type'=>'Label','caption'=>$msHint],
-                    ]
-                ],
-                [
-                    'type'=>'ExpansionPanel','caption'=>'🪲 Debug','items'=>[
-                        ['type'=>'CheckBox','name'=>'DebugPVWM','caption'=>'Modul-Debug (Regellogik)'],
-                        ['type'=>'CheckBox','name'=>'DebugMQTT','caption'=>'MQTT-Rohdaten loggen'],
-                        ['type'=>'Label','caption'=>'Ausgabe im Meldungen-Fenster.']
-                    ]
-                ],
-            ],
-            'actions'=>[
-                ['type'=>'Label','caption'=>'ℹ️ Hinweise aktualisieren sich nach Speichern.']
-            ]
-        ], JSON_UNESCAPED_UNICODE);
+        $amp = max(0, min(32, $amp));
+        $this->mqttPublish('amp', (string)$amp, false, 0);
     }
 
+    public function MQTT_SetAmp(int $amp): void { $this->ctrlSetAmp($amp); }
+    public function MQTT_SetPhase(int $mode): void { $mode = ($mode===3)?2:(($mode===1)?1:(int)$mode); $mode=in_array($mode,[1,2],true)?$mode:1; $this->mqttPublish('psm', (string)$mode, false, 0);}    
+    public function MQTT_SetFrc(int $state): void { $state=max(0,min(2,(int)$state)); $this->mqttPublish('frc', (string)$state, false, 0);}    
+
+    // -------------------------
+    // Utils
+    // -------------------------
+    private function SetValueSafe(string $ident, $value): void
+    {
+        $vid = @$this->GetIDForIdent($ident);
+        if ($vid) {
+            $old = @GetValue($vid);
+            if ($old !== $value) { @SetValue($vid, $value); }
+        }
+    }
+
+    private function getLastSetAmp(): int
+    {
+        $a = (int)$this->ReadAttributeInteger('LastSetAmp');
+        if ($a <= 0) $a = (int)$this->ReadPropertyInteger('MinAmp');
+        return $a;
+    }
 }
