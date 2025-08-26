@@ -18,7 +18,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         parent::Create();
         
         // Property: Debug an/aus
-        $this->RegisterPropertyBoolean('DebugLogging', false); // alt
         $this->RegisterPropertyBoolean('DebugPVWM', false); // allgemeine Modul-Logs
         $this->RegisterPropertyBoolean('DebugMQTT', false); // rohe MQTT-Topics/Payloads
 
@@ -683,7 +682,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                         ['type' => 'CheckBox', 'name' => 'DebugPVWM', 'caption' => 'PVWM-Logs aktivieren (Instanz-Debug & Meldungen)'],
                         ['type' => 'CheckBox', 'name' => 'DebugMQTT', 'caption' => 'MQTT-Daten protokollieren (Topic = Payload)'],
                         // optional: Alt-Flag sichtbar lassen
-                        ['type' => 'CheckBox', 'name' => 'DebugLogging', 'caption' => 'Debug-Logging aktivieren (Instanz-Debug & Meldungen)'] // alt
+                        //['type' => 'CheckBox', 'name' => 'DebugLogging', 'caption' => 'Debug-Logging aktivieren (Instanz-Debug & Meldungen)'] // alt
                     ]
                 ],
             ]

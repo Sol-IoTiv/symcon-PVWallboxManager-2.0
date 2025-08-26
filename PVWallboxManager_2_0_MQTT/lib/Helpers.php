@@ -212,9 +212,7 @@ trait Helpers
 
     private function pvwmDebugEnabled(): bool
     {
-        // erlaubt auch das alte Flag 'DebugLogging' als Fallback
-        return (bool)$this->ReadPropertyBoolean('DebugPVWM')
-            || (bool)$this->ReadPropertyBoolean('DebugLogging');
+        return (bool)$this->ReadPropertyBoolean('DebugPVWM');
     }
 
     private function mqttDebugEnabled(): bool
