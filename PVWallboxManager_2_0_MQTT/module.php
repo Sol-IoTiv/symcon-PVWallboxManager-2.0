@@ -228,72 +228,144 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     // -------------------------
     // Slow: Anzeige (1 Hz) – nur berechnen/anzeigen
     // -------------------------
-public function SLOW_TickUI(): void
-{
-    $this->SetValueSafe('Uhrzeit', time());
+    public function SLOW_TickUI(): void
+    {
+        $this->SetValueSafe('Uhrzeit', time());
 
-    $pv = (int)round((float)$this->readVarWUnit('VarPV_ID','VarPV_Unit'));
-    $houseNetVid = @$this->GetIDForIdent('HouseNet_W');
-    $houseNet = $houseNetVid ? (int)@GetValue($houseNetVid) : 0;
-    $surplusRaw = max(0, $pv - $houseNet);
+        $pv = (int)round((float)$this->readVarWUnit('VarPV_ID','VarPV_Unit'));
+        $houseNetVid = @$this->GetIDForIdent('HouseNet_W');
+        $houseNet = $houseNetVid ? (int)@GetValue($houseNetVid) : 0;
+        $surplusRaw = max(0, $pv - $houseNet);
 
-    $alpha = min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0));
-    $prev  = (int)$this->ReadAttributeInteger('SmoothSurplusW');
-    $surplus = (int)round($alpha*$surplusRaw + (1.0-$alpha)*$prev);
-    $this->WriteAttributeInteger('SmoothSurplusW', $surplus);
+        $alpha = min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0));
+        $prev  = (int)$this->ReadAttributeInteger('SmoothSurplusW');
+        $surplus = (int)round($alpha*$surplusRaw + (1.0-$alpha)*$prev);
+        $this->WriteAttributeInteger('SmoothSurplusW', $surplus);
 
-    $pm = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p, 2=3p
-    $phEff = (int)$this->ReadAttributeInteger('WB_ActivePhases');
-    if ($phEff < 1 || $phEff > 3) { $phEff = ($pm===2) ? 3 : 1; }
-    $U = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
-    $minA = (int)$this->ReadPropertyInteger('MinAmp');
-    $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
+        $pm = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p, 2=3p
+        $phEff = (int)$this->ReadAttributeInteger('WB_ActivePhases');
+        if ($phEff < 1 || $phEff > 3) { $phEff = ($pm===2) ? 3 : 1; }
+        $U = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
+        $minA = (int)$this->ReadPropertyInteger('MinAmp');
+        $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
 
-    // NRG frisch parsen (falls vorhanden)
-    $nrgBuf = $this->mqttBufGet('nrg', null);
-    if ($nrgBuf !== null && method_exists($this, 'parseAndStoreNRG')) {
-        try { $this->parseAndStoreNRG($nrgBuf); } catch (\Throwable $e) {}
+        // NRG frisch parsen (falls vorhanden)
+        $nrgBuf = $this->mqttBufGet('nrg', null);
+        if ($nrgBuf !== null && method_exists($this, 'parseAndStoreNRG')) {
+            try { $this->parseAndStoreNRG($nrgBuf); } catch (\Throwable $e) {}
+        }
+
+        // Laden aktiv?
+        $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));      // 2 = Start
+        $car = (int)@GetValue(@$this->GetIDForIdent('CarState')); // 2 = lädt
+        $charging = ($frc === 2) && ($car === 2);
+
+        // WB-Leistung = NRG[11] wenn geladen, sonst 0
+        $wbW = 0;
+        if ($charging) {
+            $nrg = $this->mqttBufGet('nrg', null);
+            if (is_string($nrg)) { $tmp = @json_decode($nrg, true); if (is_array($tmp)) $nrg = $tmp; }
+            if (is_array($nrg) && array_key_exists(11, $nrg) && is_numeric($nrg[11])) {
+                $wbW = (int)round(max(0.0, (float)$nrg[11]));
+            }
+            if ($wbW <= 0) {
+                $ampLive = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
+                $wbW = (int)round($ampLive * $U * max(1, $phEff));
+            }
+        }
+        $this->SetValueSafe('Leistung_W', $wbW);
+
+        $targetW = $surplus;
+        $targetA = (int)ceil($targetW / ($U * max(1,$phEff)));
+        $targetA = max($minA, min($maxA, $targetA));
+        $this->SetValueSafe('TargetW_Live', $targetW);
+        $this->SetValueSafe('TargetA_Live', $targetA);
+        $this->WriteAttributeInteger('Slow_LastCalcA', $targetA);
+
+        // Sekundenzähler für schnellen FRC
+        $this->WriteAttributeInteger('Slow_SurplusRaw', $surplusRaw);
+        $startW = (int)$this->ReadPropertyInteger('StartThresholdW');
+        $stopW  = (int)$this->ReadPropertyInteger('StopThresholdW');
+        $above  = (int)$this->ReadAttributeInteger('Slow_AboveStartMs');
+        $below  = (int)$this->ReadAttributeInteger('Slow_BelowStopMs');
+        $above  = ($surplusRaw >= $startW) ? min($above + 1000, 3600000) : 0;
+        $below  = ($surplusRaw <= $stopW)  ? min($below + 1000, 3600000) : 0;
+        $this->WriteAttributeInteger('Slow_AboveStartMs', $above);
+        $this->WriteAttributeInteger('Slow_BelowStopMs',  $below);
     }
 
-    // Laden aktiv?
-    $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));      // 2 = Start
-    $car = (int)@GetValue(@$this->GetIDForIdent('CarState')); // 2 = lädt
-    $charging = ($frc === 2) && ($car === 2);
+    public function SLOW_TickControl(): void
+    {
+        // Slow-Regler aktiv?
+        if (!(bool)@GetValue(@$this->GetIDForIdent('SlowControlActive'))) return;
 
-    // WB-Leistung = NRG[11] wenn geladen, sonst 0
-    $wbW = 0;
-    if ($charging) {
-        $nrg = $this->mqttBufGet('nrg', null);
-        if (is_string($nrg)) { $tmp = @json_decode($nrg, true); if (is_array($tmp)) $nrg = $tmp; }
-        if (is_array($nrg) && array_key_exists(11, $nrg) && is_numeric($nrg[11])) {
-            $wbW = (int)round(max(0.0, (float)$nrg[11]));
+        // AUS-Modus?
+        $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV, 1=Manuell, 2=Aus
+        if ($mode === 2) return;
+
+        $nowMs   = (int)(microtime(true)*1000);
+        $gapMs   = (int)$this->ReadPropertyInteger('MinPublishGapMs');
+        $lastPub = (int)$this->ReadAttributeInteger('LastPublishMs');
+        if ($nowMs - $lastPub < $gapMs) return;
+
+        // Start/Stop aus Sekundenzählern (roher Überschuss)
+        $aboveMs = (int)$this->ReadAttributeInteger('Slow_AboveStartMs');
+        $belowMs = (int)$this->ReadAttributeInteger('Slow_BelowStopMs');
+        $startHoldMs = max(1000, (int)$this->ReadPropertyInteger('StartCycles') * 1000);
+        $stopHoldMs  = max(1000, (int)$this->ReadPropertyInteger('StopCycles')  * 1000);
+        $startOk = ($aboveMs >= $startHoldMs);
+        $stopOk  = ($belowMs >= $stopHoldMs);
+
+        // Mindestlaufzeiten
+        $lastFR  = (int)$this->ReadAttributeInteger('LastFrcChangeMs');
+        $onHold  = ($nowMs - $lastFR) < (int)$this->ReadPropertyInteger('MinOnTimeMs');
+        $offHold = ($nowMs - $lastFR) < (int)$this->ReadPropertyInteger('MinOffTimeMs');
+
+        $frcCur = (int)@GetValue(@$this->GetIDForIdent('FRC'));
+
+        // STOP bei fehlendem Überschuss
+        if ($stopOk && !$onHold && $frcCur !== 1) {
+            $this->sendSet('frc', '1');
+            $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
+            $this->dbgLog('SLOW', 'FRC=Stop');
+            return;
         }
-        if ($wbW <= 0) {
-            $ampLive = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
-            $wbW = (int)round($ampLive * $U * max(1, $phEff));
+
+        // START bei Überschuss
+        if ($startOk && !$offHold && $frcCur !== 2) {
+            $this->sendSet('frc', '2');
+            $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
+            $this->dbgLog('SLOW', 'FRC=Start');
+            // weiter: Amp regeln
         }
+
+        // Nur regeln, wenn Laden erzwungen/aktiv
+        if ((int)@GetValue(@$this->GetIDForIdent('FRC')) !== 2) return;
+
+        // Ziel-Amp aus 1-Hz-Tick
+        $targetA = (int)$this->ReadAttributeInteger('Slow_LastCalcA');
+        if ($targetA <= 0) return;
+
+        // Ist-Amp
+        $minA = (int)$this->ReadPropertyInteger('MinAmp');
+        $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
+        $vidA = @$this->GetIDForIdent('Ampere_A');
+        $curA = $vidA ? (int)@GetValue($vidA) : (int)$this->ReadAttributeInteger('LastAmpSet');
+        if ($curA <= 0) $curA = $minA;
+
+        if ($targetA === $curA) return;
+
+        // ±1 A Schritt
+        $nextA = ($targetA > $curA) ? $curA + 1 : $curA - 1;
+        $nextA = max($minA, min($maxA, $nextA));
+
+        // Senden
+        $this->sendSet('amp', (string)$nextA);
+        if ($vidA) @SetValue($vidA, $nextA);
+        $this->WriteAttributeInteger('LastAmpSet',    $nextA);
+        $this->WriteAttributeInteger('LastPublishMs', $nowMs);
+        $this->dbgLog('RAMP_SLOW', sprintf('A %d → %d (Ziel=%d)', $curA, $nextA, $targetA));
     }
-    $this->SetValueSafe('Leistung_W', $wbW);
-
-    $targetW = $surplus;
-    $targetA = (int)ceil($targetW / ($U * max(1,$phEff)));
-    $targetA = max($minA, min($maxA, $targetA));
-    $this->SetValueSafe('TargetW_Live', $targetW);
-    $this->SetValueSafe('TargetA_Live', $targetA);
-    $this->WriteAttributeInteger('Slow_LastCalcA', $targetA);
-
-    // Sekundenzähler für schnellen FRC
-    $this->WriteAttributeInteger('Slow_SurplusRaw', $surplusRaw);
-    $startW = (int)$this->ReadPropertyInteger('StartThresholdW');
-    $stopW  = (int)$this->ReadPropertyInteger('StopThresholdW');
-    $above  = (int)$this->ReadAttributeInteger('Slow_AboveStartMs');
-    $below  = (int)$this->ReadAttributeInteger('Slow_BelowStopMs');
-    $above  = ($surplusRaw >= $startW) ? min($above + 1000, 3600000) : 0;
-    $below  = ($surplusRaw <= $stopW)  ? min($below + 1000, 3600000) : 0;
-    $this->WriteAttributeInteger('Slow_AboveStartMs', $above);
-    $this->WriteAttributeInteger('Slow_BelowStopMs',  $below);
-}
-
 
     // -------------------------
     // Klassik-Loop bleibt verfügbar, wird aber in Slow nicht benutzt
