@@ -243,26 +243,26 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $minA = (int)$this->ReadPropertyInteger('MinAmp');
         $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
 
-        // WB-Leistung live (MQTT bevorzugt)
-        $wbW = (int)round(max(0.0, (float)$this->getWBPowerW()));
+        // WB-Leistung live (nur >0 wenn wirklich geladen wird)
+        $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));      // 2 = Start
+        $car = (int)@GetValue(@$this->GetIDForIdent('CarState')); // 2 = lädt (go-e)
+        $charging = ($frc === 2) && ($car === 2);
 
-        // Laden aktiv?
-        $charging = false;
-        if (method_exists($this, 'isChargingActive')) {
-            $charging = (bool)$this->isChargingActive();
-        } else {
-            $frc = (int)@GetValue(@$this->GetIDForIdent('FRC')); // 2 = Start
-            $car = (int)@GetValue(@$this->GetIDForIdent('CarState'));
-            $charging = ($frc === 2) && in_array($car, [2,3,4], true);
-        }
+        $wbW = 0;
+        if ($charging) {
+            // MQTT-Wert bevorzugen
+            $wbW = (int)round(max(0.0, (float)$this->getWBPowerW()));
 
-        // Fallback NUR wenn geladen wird und MQTT-Wert fehlt
-        if ($wbW <= 0) {
-            if ($charging) {
+            // optional: nur frische Werte (falls Trait-Timestamp vorhanden)
+            if (method_exists($this, 'getWBPowerTsMs')) {
+                $ts = (int)$this->getWBPowerTsMs();
+                if ((int)(microtime(true)*1000) - $ts > 5000) $wbW = 0; // älter als 5 s
+            }
+
+            // Fallback aus A*U*Phasen, nur wenn MQTT 0 liefert
+            if ($wbW <= 0) {
                 $ampLive = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
                 $wbW = (int)round($ampLive * $U * max(1, $phEff));
-            } else {
-                $wbW = 0;
             }
         }
         $this->SetValueSafe('Leistung_W', $wbW);
