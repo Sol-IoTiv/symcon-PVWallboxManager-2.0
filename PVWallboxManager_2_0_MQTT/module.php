@@ -440,38 +440,36 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             $startedNow = true;
         }
 
-        // --- Sanftes Ampere-Update ---
-        $lastPub = (int)$this->ReadAttributeInteger('LastPublishMs');
-        $gapMs   = (int)$this->ReadPropertyInteger('MinPublishGapMs');
-
-        $lastA = (int)$this->ReadAttributeInteger('LastAmpSet');
-        $curA  = $lastA;                                // zuletzt GESENDET
-        $vidA  = @$this->GetIDForIdent('Ampere_A');     // nur Anzeige
-
-        // Zielampere: schnell reagieren → roh, mit halber Reserve
-        $effSurplus = max(0, $surplusRaw - (int)floor($resW / 2));
-        $setA       = max($minA, min($maxA, (int)floor($effSurplus / ($U * max(1, $phEff)))));
-
-        // Ramp-Parameter
-        $minDeltaA = 1;
+        // --- Sanftes Ampere-Update (ein Block, korrekt initialisiert) ---
+        $lastPub   = (int)$this->ReadAttributeInteger('LastPublishMs');
+        $gapMs     = (int)$this->ReadPropertyInteger('MinPublishGapMs');
         $minHoldMs = (int)max(3000, floor($gapMs * 1.5));
         $sincePub  = $nowMs - $lastPub;
 
-        // Nur während Ladevorgang und mit Rate-Limit rampen
-        if ($charging && $sincePub >= $minHoldMs && abs($setA - $curA) >= $minDeltaA) {
-            $nextA = $curA + (($setA > $curA) ? 1 : -1);       // 1 A Schritte
+        $vidA  = @$this->GetIDForIdent('Ampere_A');
+        $lastA = (int)$this->ReadAttributeInteger('LastAmpSet');
+        $curA  = $vidA ? (int)@GetValue($vidA) : $lastA;
+
+        // Ziel-A auf Basis ROH-Überschuss und effektiver Phasen
+        $effSurplus = max(0, $surplusRaw - (int)floor($resW / 2));
+        $setA = max($minA, min($maxA, (int)floor($effSurplus / ($U * max(1, $phEff)))));
+
+        // Nur während aktiver Ladung rampen
+        if ($charging && $sincePub >= $minHoldMs && $setA !== $curA) {
+            $nextA = $curA + (($setA > $curA) ? 1 : -1);     // 1A Schritte
             $nextA = max($minA, min($maxA, $nextA));
+
             if ($nextA !== $curA) {
                 $this->sendSet('amp', (string)$nextA);
-                if ($vidA) @SetValue($vidA, $nextA);           // Anzeige nachziehen
+                if ($vidA) @SetValue($vidA, $nextA);          // Anzeige
                 $this->WriteAttributeInteger('LastAmpSet',    $nextA);
                 $this->WriteAttributeInteger('LastPublishMs', $nowMs);
                 $this->dbgChanged('Ampere', $curA.' A', $nextA.' A');
             }
         } else {
             $this->dbgLog('Ampere', sprintf(
-                'kein Ramp: charging=%s, ΔA=%d, sincePub=%d/%d, setA=%d, curA=%d',
-                $charging ? 'ja' : 'nein', abs($setA - $curA), $sincePub, $minHoldMs, $setA, $curA
+                'kein Ramp: charging=%s, ΔA=%d, sincePub=%d/%d, set=%d, cur=%d, phEff=%d',
+                $charging ? 'ja' : 'nein', abs($setA - $curA), $sincePub, $minHoldMs, $setA, $curA, $phEff
             ));
         }
     }
