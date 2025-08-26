@@ -228,9 +228,12 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $mode  = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV, 1=Manuell, 2=Aus
         $nowMs = (int)(microtime(true) * 1000);
         $lastFR = $this->lastFrcChangeMs();
-        $lastFR = $this->_lastFrcChangeMs();
 
-
+        // MQTT-Buffer lesen
+        $nrg = $this->mqttBufGet('nrg', null);
+        if ($nrg !== null) {
+            $this->parseAndStoreNRG($nrg); // setzt Leistung_W intern wie gehabt
+        }
 
         // AUS: Force-Off erzwingen und raus
         if ($mode === 2) {
@@ -242,7 +245,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             }
             return;
         }
-
+    
         // MANUELL: Phasen + Ampere durchsetzen, Force-On, dann raus
         if ($mode === 1) {
             $holdMs   = (int)$this->ReadPropertyInteger('MinHoldAfterPhaseMs');
@@ -266,7 +269,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             $lastA   = (int)$this->ReadAttributeInteger('LastAmpSet');
 
             if (($nowMs - $lastPub) >= $gapMs && $aWanted !== $lastA) {
-                $this->sendSet('ama', (string)$aWanted);
+                $this->sendSet('amp', (string)$aWanted);
                 $this->WriteAttributeInteger('LastAmpSet', $aWanted);
                 $this->WriteAttributeInteger('LastPublishMs', $nowMs);
                 $this->dbgChanged('Ampere', $lastA.' A', $aWanted.' A');
@@ -380,7 +383,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $onHold  = ($nowMs - $lastFR) < (int)$this->ReadPropertyInteger('MinOnTimeMs');
         $offHold = ($nowMs - $lastFR) < (int)$this->ReadPropertyInteger('MinOffTimeMs');
 
-        $connected = ($car >= 3);
+//        $connected = ($car >= 3);
+        $connected = in_array($car, [1,2,3,4], true);
         $charging  = $this->isChargingActive();
 
         $minP1 = $minA * $U * 1 + $resW;
@@ -449,7 +453,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             $nextA = max($minA, min($maxA, $nextA));
 
             if ($nextA !== $curA) {
-                $this->sendSet('ama', (string)$nextA);
+                $this->sendSet('amp', (string)$nextA);
                 if ($vidA) @SetValue($vidA, $nextA);
                 $this->WriteAttributeInteger('LastAmpSet',    $nextA);
                 $this->WriteAttributeInteger('LastPublishMs', $nowMs);
@@ -518,30 +522,22 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         }
     }
 
+    /**
+     * Letzter FRC-Änderzeitpunkt in ms.
+     * Max aus Attribut (explizit gesetzt) und Zeit der FRC-Variable.
+     */
     private function lastFrcChangeMs(): int
     {
         $attr = (int)$this->ReadAttributeInteger('LastFrcChangeMs');
-        $vid  = @$this->GetIDForIdent('FRC');
-        $varMs = 0;
-        if ($vid && @IPS_VariableExists($vid)) {
-            $vi = @IPS_GetVariable($vid);
-            // VariableUpdated = UNIX s → ms
-            if (is_array($vi) && isset($vi['VariableUpdated'])) {
-                $varMs = (int)$vi['VariableUpdated'] * 1000;
-            }
-        }
-        return max($attr, $varMs);
-    }
 
-    private function _lastFrcChangeMs(): int
-    {
-        $attr = (int)$this->ReadAttributeInteger('LastFrcChangeMs');
-        $vid  = @$this->GetIDForIdent('FRC');
+        $vid = @$this->GetIDForIdent('FRC');
         if ($vid && @IPS_VariableExists($vid)) {
             $vi = @IPS_GetVariable($vid);
             if (is_array($vi) && isset($vi['VariableUpdated'])) {
                 $varMs = (int)$vi['VariableUpdated'] * 1000; // s → ms
-                return max($attr, $varMs);
+                if ($varMs > $attr) {
+                    return $varMs;
+                }
             }
         }
         return $attr;

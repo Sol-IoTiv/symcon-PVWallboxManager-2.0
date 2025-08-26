@@ -206,8 +206,14 @@ trait Helpers
 
     private function scheduleUpdateFromMqtt(int $delayMs = 350): void
     {
-        // KEIN RegisterTimer hier – der Timer existiert aus Create()
-        $this->SetTimerInterval('LOOP', max(150, $delayMs));
+        if ($delayMs < 50) $delayMs = 50;
+        // Dein bestehender Timer-Name:
+        $this->SetTimerInterval('LOOP', $delayMs);
+    }
+    protected function mqttBufGet(string $key, $default=null)
+    {
+        $buf = json_decode($this->ReadAttributeString('MQTT_BUF'), true) ?: [];
+        return array_key_exists($key, $buf) ? $buf[$key] : $default;
     }
 
     private function pvwmDebugEnabled(): bool

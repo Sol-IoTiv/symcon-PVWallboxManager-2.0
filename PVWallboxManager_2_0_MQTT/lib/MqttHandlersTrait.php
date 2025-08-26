@@ -77,7 +77,7 @@ trait MqttHandlersTrait
                 $old = (int)@GetValue(@$this->GetIDForIdent('FRC'));
                 if ($old !== $new) {
                     $this->SetValueSafe('FRC', $new);
-                    $this->WriteAttributeInteger('LastFrcChangeMs', (int)(microtime(true)*1000)); // Schaltzeit merken
+                    $this->WriteAttributeInteger('LastFrcChangeMs', (int)(microtime(true)*1000));
                     $this->dbgChanged('FRC @'.$topic, $this->frcLabel($old), $this->frcLabel($new));
                 }
                 break;
@@ -96,7 +96,7 @@ trait MqttHandlersTrait
 
             case 'utc':
             {
-                $raw = trim($payload, "\" \t\n\r\0\x0B");
+                $raw   = trim($payload, "\" \t\n\r\0\x0B");
                 $oldTs = (int)@GetValue(@$this->GetIDForIdent('Uhrzeit')) ?: 0;
 
                 try {
@@ -117,20 +117,25 @@ trait MqttHandlersTrait
 
             case 'nrg':
             {
-                // eigenes NRG-Log (schaltbar)
+                // Nur Log. Kein parse/store, keine Loop hier.
                 $this->dbgMqtt('NRG', $topic . ' = ' . $payload);
-
-                $this->parseAndStoreNRG($payload); // setzt Leistung_W
-
-                // deine bestehende Folge-Logik
-                $this->updateHouseNetFromInputs(); // oder RecalcHausverbrauchAbzWallbox(false)
-                $this->Loop();
                 break;
             }
 
             default:
                 break;
         }
+
+        // --- NEU: Frame puffern + One-Shot LOOP auslösen ---
+        $buf = json_decode($this->ReadAttributeString('MQTT_BUF'), true) ?: [];
+        $buf[$key] = $payload;
+        $this->WriteAttributeString('MQTT_BUF', json_encode($buf, JSON_UNESCAPED_SLASHES));
+
+        // Coalescing: deine vorhandene LOOP-Timer-Instanz als One-Shot verwenden
+        $this->scheduleUpdateFromMqtt(350);
+
+        // WICHTIG: kein parseAndStoreNRG(), kein updateHouseNetFromInputs(), keine Loop() direkt hier.
+        return;
     }
 
     private function parseAndStoreNRG(string $payload): void
