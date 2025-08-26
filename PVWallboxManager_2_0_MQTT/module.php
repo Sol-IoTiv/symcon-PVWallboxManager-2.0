@@ -509,7 +509,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         // --- WB Glättung (EMA) ---
         $alphaWB   = 0.4; // dezent, keine Property nötig
         $wbPrev    = (int)$this->ReadAttributeInteger('WB_W_Smooth');
-        $wbSmooth  = (int)round($alphaWB * $wbRaw + (1.0 - $alphaWB) * $wbPrev);
+        if ($wbPrev <= 0) { $wbPrev = (int)round((float)$wbRaw); } // erster Lauf stabil
+        $wbSmooth = (int)round($alphaWB * (float)$wbRaw + (1.0 - $alphaWB) * (float)$wbPrev);
         $this->WriteAttributeInteger('WB_W_Smooth', $wbSmooth);
 
         // --- Hysterese für "WB abziehen?" (On/Off um die Min-Schwelle) ---
@@ -547,11 +548,14 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         if ($withLog) {
             $fmt = static function (int $w): string { return number_format($w, 0, ',', '.'); };
             $this->dbgLog('HausNet', sprintf(
-                'HausGesamt=%s W | WB=%s W %s (Schwelle=%s W) → HausNet=%s W',
-                $fmt((int)round($houseTotal)),
-                $fmt((int)round($wb)),
-                ($wb > $minWB) ? 'abgezogen' : '≤ Schwelle, nicht abgezogen',
-                $fmt($minWB),
+                'HausGesamt=%s W | WB raw=%s W, smooth=%s W, eff=%s W [%s] (Schwelle on=%s/off=%s) → HausNet=%s W',
+                $fmt((int)round((float)$houseTotal)),
+                $fmt((int)round((float)$wbRaw)),
+                $fmt((int)round((float)$wbSmooth)),
+                $fmt((int)round((float)$wbEff)),
+                $active ? 'aktiv' : 'inaktiv',
+                $fmt($onW),
+                $fmt($offW),
                 $fmt($houseNet)
             ));
         }
