@@ -580,70 +580,73 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         return json_encode([
             'elements' => [
                 [
-                    'type' => 'ExpansionPanel', 'caption' => '🔌 Wallbox Konfiguration', 'items' => [
-                        ['type' => 'ValidationTextBox', 'name' => 'BaseTopic',       'caption' => 'Base-Topic (z. B. go-eCharger/285450)'],
-                        ['type' => 'ValidationTextBox', 'name' => 'DeviceIDFilter',  'caption' => 'Device-ID Filter (optional)'],
-                        ['type' => 'RowLayout', 'items' => [
-                            ['type' => 'SpinBox',       'name' => 'MinAmp',        'caption' => 'Min. Ampere',  'minimum' => 1,  'maximum' => 32, 'suffix' => ' A'],
-                            ['type' => 'SpinBox',       'name' => 'MaxAmp',        'caption' => 'Max. Ampere',  'minimum' => 1,  'maximum' => 32, 'suffix' => ' A'],
-                            ['type' => 'NumberSpinner', 'name' => 'NominalVolt',   'caption' => 'Netzspannung', 'minimum' => 200,'maximum' => 245,'suffix' => ' V'],
+                    'type'=>'ExpansionPanel','caption'=>'🔌 Wallbox Konfiguration','items'=>[
+                        ['type'=>'ValidationTextBox','name'=>'BaseTopic','caption'=>'Base-Topic (z. B. go-eCharger/285450)'],
+                        ['type'=>'ValidationTextBox','name'=>'DeviceIDFilter','caption'=>'Device-ID Filter (optional)'],
+                        ['type'=>'RowLayout','items'=>[
+                            ['type'=>'NumberSpinner','name'=>'MinAmp','caption'=>'Min. Ampere','minimum'=>1,'maximum'=>32,'suffix'=>' A'],
+                            ['type'=>'NumberSpinner','name'=>'MaxAmp','caption'=>'Max. Ampere','minimum'=>1,'maximum'=>32,'suffix'=>' A'],
+                            ['type'=>'NumberSpinner','name'=>'NominalVolt','caption'=>'Netzspannung','minimum'=>200,'maximum'=>245,'suffix'=>' V'],
                         ]],
-                        ['type' => 'NumberSpinner', 'name' => 'MinHoldAfterPhaseMs', 'caption' => 'Sperrzeit Phasenwechsel', 'suffix' => ' ms'],
-                        ['type' => 'Label', 'caption' => $msHint],
-                        ['type' => 'Label', 'caption' => "⚙️ Richtwerte: 3-ph Start ab ≈ {$thr3} W · 1-ph unter ≈ {$thr1} W"],
+                        ['type'=>'NumberSpinner','name'=>'MinHoldAfterPhaseMs','caption'=>'Sperrzeit Phasenwechsel','suffix'=>' ms'],
+                        ['type'=>'Label','caption'=>$msHint],
+                        ['type'=>'Label','caption'=>"⚙️ Richtwerte: 3-ph Start ab ≈ {$thr3} W · 1-ph unter ≈ {$thr1} W"],
                     ]
                 ],
                 [
-                    'type' => 'ExpansionPanel', 'caption' => '⚡ Eingänge', 'items' => [
-                        ['type' => 'SelectVariable', 'name' => 'VarPV_ID',      'caption' => 'PV-Leistung'],
-                        ['type' => 'SelectVariable', 'name' => 'VarHouse_ID',   'caption' => 'Haus gesamt (inkl. WB)'],
-                        ['type' => 'SelectVariable', 'name' => 'VarBattery_ID', 'caption' => 'Batterie (optional)'],
-                        ['type' => 'RowLayout', 'items' => [
-                            ['type' => 'Select', 'name' => 'VarPV_Unit',     'caption' => 'PV Einheit',   'options' => [['caption'=>'W','value'=>'W'],['caption'=>'kW','value'=>'kW']]],
-                            ['type' => 'Select', 'name' => 'VarHouse_Unit',  'caption' => 'Haus Einheit', 'options' => [['caption'=>'W','value'=>'W'],['caption'=>'kW','value'=>'kW']]],
-                            ['type' => 'Select', 'name' => 'VarBattery_Unit','caption' => 'Batt Einheit', 'options' => [['caption'=>'W','value'=>'W'],['caption'=>'kW','value'=>'kW']]],
+                    'type'=>'ExpansionPanel','caption'=>'⚡ Eingänge','items'=>[
+                        ['type'=>'SelectVariable','name'=>'VarPV_ID','caption'=>'PV-Leistung'],
+                        ['type'=>'SelectVariable','name'=>'VarHouse_ID','caption'=>'Haus gesamt (inkl. WB)'],
+                        ['type'=>'SelectVariable','name'=>'VarBattery_ID','caption'=>'Batterie (optional)'],
+                        ['type'=>'RowLayout','items'=>[
+                            ['type'=>'Select','name'=>'VarPV_Unit','caption'=>'PV Einheit','options'=>[
+                                ['caption'=>'W','value'=>'W'],['caption'=>'kW','value'=>'kW']]],
+                            ['type'=>'Select','name'=>'VarHouse_Unit','caption'=>'Haus Einheit','options'=>[
+                                ['caption'=>'W','value'=>'W'],['caption'=>'kW','value'=>'kW']]],
+                            ['type'=>'Select','name'=>'VarBattery_Unit','caption'=>'Batt Einheit','options'=>[
+                                ['caption'=>'W','value'=>'W'],['caption'=>'kW','value'=>'kW']]],
                         ]],
-                        ['type' => 'CheckBox', 'name' => 'BatteryPositiveIsCharge', 'caption' => '+ bedeutet Laden'],
-                        ['type' => 'NumberSpinner', 'name' => 'WBSubtractMinW', 'caption' => 'WB-Abzug ab', 'suffix' => ' W'],
-                        ['type' => 'Label', 'caption' => 'WB-Leistung erst ab diesem Wert vom Hausverbrauch abziehen.'],
-                        ['type' => 'NumberSpinner', 'name' => 'SmoothAlphaPermille', 'caption' => 'Glättung α · 0..1000', 'suffix' => ' ‰'],
-                        ['type' => 'Label', 'caption' => '350 ≈ 0,35 · 0 = aus · 1000 = keine Glättung'],
+                        ['type'=>'CheckBox','name'=>'BatteryPositiveIsCharge','caption'=>'+ bedeutet Laden'],
+                        ['type'=>'NumberSpinner','name'=>'WBSubtractMinW','caption'=>'WB-Abzug ab','suffix'=>' W'],
+                        ['type'=>'Label','caption'=>'WB-Leistung erst ab diesem Wert vom Hausverbrauch abziehen.'],
+                        ['type'=>'NumberSpinner','name'=>'SmoothAlphaPermille','caption'=>'Glättung α · 0..1000','suffix'=>' ‰'],
+                        ['type'=>'Label','caption'=>'350 ≈ 0,35 · 0 = aus · 1000 = keine Glättung'],
                     ]
                 ],
                 [
-                    'type' => 'ExpansionPanel', 'caption' => '🧠 Regellogik', 'items' => [
-                        ['type' => 'RowLayout', 'items' => [
-                            ['type' => 'NumberSpinner', 'name' => 'StartThresholdW', 'caption' => 'Start-Schwelle', 'suffix' => ' W'],
-                            ['type' => 'NumberSpinner', 'name' => 'StopThresholdW',  'caption' => 'Stop-Schwelle',  'suffix' => ' W'],
+                    'type'=>'ExpansionPanel','caption'=>'🧠 Regellogik','items'=>[
+                        ['type'=>'RowLayout','items'=>[
+                            ['type'=>'NumberSpinner','name'=>'StartThresholdW','caption'=>'Start-Schwelle','suffix'=>' W'],
+                            ['type'=>'NumberSpinner','name'=>'StopThresholdW','caption'=>'Stop-Schwelle','suffix'=>' W'],
                         ]],
-                        ['type' => 'RowLayout', 'items' => [
-                            ['type' => 'SpinBox', 'name' => 'StartCycles', 'caption' => 'Start-Zyklen', 'minimum' => 1, 'maximum' => 20],
-                            ['type' => 'SpinBox', 'name' => 'StopCycles',  'caption' => 'Stop-Zyklen',  'minimum' => 1, 'maximum' => 20],
+                        ['type'=>'RowLayout','items'=>[
+                            ['type'=>'NumberSpinner','name'=>'StartCycles','caption'=>'Start-Zyklen','minimum'=>1,'maximum'=>20],
+                            ['type'=>'NumberSpinner','name'=>'StopCycles','caption'=>'Stop-Zyklen','minimum'=>1,'maximum'=>20],
                         ]],
-                        ['type' => 'RowLayout', 'items' => [
-                            ['type' => 'NumberSpinner', 'name' => 'ThresTo1p_W', 'caption' => '→ 1-ph unter', 'suffix' => ' W'],
-                            ['type' => 'SpinBox',       'name' => 'To1pCycles',  'caption' => 'Zyklen'],
-                            ['type' => 'NumberSpinner', 'name' => 'ThresTo3p_W', 'caption' => '→ 3-ph über', 'suffix' => ' W'],
-                            ['type' => 'SpinBox',       'name' => 'To3pCycles',  'caption' => 'Zyklen'],
+                        ['type'=>'RowLayout','items'=>[
+                            ['type'=>'NumberSpinner','name'=>'ThresTo1p_W','caption'=>'→ 1-ph unter','suffix'=>' W'],
+                            ['type'=>'NumberSpinner','name'=>'To1pCycles','caption'=>'Zyklen','minimum'=>1,'maximum'=>20],
+                            ['type'=>'NumberSpinner','name'=>'ThresTo3p_W','caption'=>'→ 3-ph über','suffix'=>' W'],
+                            ['type'=>'NumberSpinner','name'=>'To3pCycles','caption'=>'Zyklen','minimum'=>1,'maximum'=>20],
                         ]],
-                        ['type' => 'NumberSpinner', 'name' => 'StartReserveW', 'caption' => 'Start-Reserve', 'suffix' => ' W'],
+                        ['type'=>'NumberSpinner','name'=>'StartReserveW','caption'=>'Start-Reserve','suffix'=>' W'],
                     ]
                 ],
                 [
-                    'type' => 'ExpansionPanel', 'caption' => '🔧 Ramping & Zeiten', 'items' => [
-                        ['type' => 'NumberSpinner', 'name' => 'MinPublishGapMs', 'caption' => 'Mindestabstand amp/set', 'suffix' => ' ms'],
-                        ['type' => 'NumberSpinner', 'name' => 'RampHoldMs',      'caption' => 'Ramping-Haltezeit',      'suffix' => ' ms'],
-                        ['type' => 'SpinBox',       'name' => 'RampStepA',       'caption' => 'Ramping-Schritt',        'minimum' => 1, 'maximum' => 5, 'suffix' => ' A'],
-                        ['type' => 'RowLayout', 'items' => [
-                            ['type' => 'NumberSpinner', 'name' => 'MinOnTimeMs',  'caption' => 'Min. EIN-Zeit', 'suffix' => ' ms'],
-                            ['type' => 'NumberSpinner', 'name' => 'MinOffTimeMs', 'caption' => 'Min. AUS-Zeit', 'suffix' => ' ms'],
+                    'type'=>'ExpansionPanel','caption'=>'🔧 Ramping & Zeiten','items'=>[
+                        ['type'=>'NumberSpinner','name'=>'MinPublishGapMs','caption'=>'Mindestabstand amp/set','suffix'=>' ms'],
+                        ['type'=>'NumberSpinner','name'=>'RampHoldMs','caption'=>'Ramping-Haltezeit','suffix'=>' ms'],
+                        ['type'=>'NumberSpinner','name'=>'RampStepA','caption'=>'Ramping-Schritt','minimum'=>1,'maximum'=>5,'suffix'=>' A'],
+                        ['type'=>'RowLayout','items'=>[
+                            ['type'=>'NumberSpinner','name'=>'MinOnTimeMs','caption'=>'Min. EIN-Zeit','suffix'=>' ms'],
+                            ['type'=>'NumberSpinner','name'=>'MinOffTimeMs','caption'=>'Min. AUS-Zeit','suffix'=>' ms'],
                         ]],
-                        ['type' => 'Label', 'caption' => $msHint],
+                        ['type'=>'Label','caption'=>$msHint],
                     ]
                 ],
             ],
-            'actions' => [
-                ['type' => 'Label', 'caption' => 'ℹ️ Hinweise aktualisieren sich nach Speichern.']
+            'actions'=>[
+                ['type'=>'Label','caption'=>'ℹ️ Hinweise aktualisieren sich nach Speichern.']
             ]
         ], JSON_UNESCAPED_UNICODE);
     }
