@@ -140,47 +140,33 @@ trait MqttHandlersTrait
 
     private function parseAndStoreNRG(string $payload): void
     {
+        // nrg: U(L1,L2,L3,N)[0..3], I(L1,L2,L3)[4..6], P(L1,L2,L3,N,Total)[7..11], pf(L1,L2,L3,N)[12..15]
         $p = trim($payload, "\" \t\n\r\0\x0B");
-        $arr = null;
-
-        if ($p !== '' && $p[0] === '[') {
-            $arr = @json_decode($p, true);
-        } else {
-            $parts = preg_split('/[;,]/', $p);
-            if (is_array($parts)) {
-                $arr = array_map(static fn($x) => is_numeric($x) ? (float)$x : null, $parts);
-            }
-        }
+        $arr = ($p !== '' && $p[0] === '[') ? @json_decode($p, true) : null;
         if (!is_array($arr)) {
-            return;
+            $parts = preg_split('/[;,]/', $p);
+            if (is_array($parts)) $arr = array_map(static fn($x)=>is_numeric($x)?(float)$x:null, $parts);
         }
+        if (!is_array($arr)) return;
 
         // Gesamtleistung
         if (isset($arr[11]) && is_numeric($arr[11])) {
             $ptotal = (int)round((float)$arr[11]);
             $this->SetValueSafe('Leistung_W', $ptotal);
-            $this->dbgLog('NRG→Leistung_W', $ptotal . ' W');
+            $this->dbgLog('NRG→Leistung_W', $ptotal.' W');
         }
 
         // Phasen-Erkennung
         $U = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
-        $pmDeclared = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p, 2=3p
+        $pmDeclared = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p,2=3p
         $phDeclared = ($pmDeclared === 2) ? 3 : 1;
 
-        $p1 = isset($arr[7]) ? (float)$arr[7] : null;
-        $p2 = isset($arr[8]) ? (float)$arr[8] : null;
-        $p3 = isset($arr[9]) ? (float)$arr[9] : null;
+        $p1 = $arr[7]  ?? null;  $p2 = $arr[8]  ?? null;  $p3 = $arr[9]  ?? null;   // P je Phase
+        $i1 = $arr[4]  ?? null;  $i2 = $arr[5]  ?? null;  $i3 = $arr[6]  ?? null;   // I je Phase
 
-        $i1 = isset($arr[3]) ? (float)$arr[3] : null;
-        $i2 = isset($arr[4]) ? (float)$arr[4] : null;
-        $i3 = isset($arr[5]) ? (float)$arr[5] : null;
-
-        // bevorzugt Leistung je Phase, sonst Strom je Phase
-        $phEff = 0;
-        $via   = 'declared';
-
+        $phEff = 0; $via = 'declared';
         if ($p1 !== null && $p2 !== null && $p3 !== null) {
-            $thW = (int)max(120, round($U * 0.6)); // ~140 W bei 230 V
+            $thW = (int)max(120, round($U * 0.6));
             $phEff = (int)($p1 > $thW) + (int)($p2 > $thW) + (int)($p3 > $thW);
             if ($phEff > 0) $via = 'P';
         }
@@ -189,8 +175,8 @@ trait MqttHandlersTrait
             if ($phEff > 0) $via = 'I';
         }
 
-        if ($phEff <= 0) $phEff = $phDeclared; // Fallback
-        if ($phDeclared === 1) $phEff = 1;     // 1p-Kontaktor begrenzt
+        if ($phEff <= 0) $phEff = $phDeclared;
+        if ($phDeclared === 1) $phEff = 1;
         $phEff = min(3, max(1, $phEff));
 
         $this->WriteAttributeInteger('WB_ActivePhases', $phEff);
