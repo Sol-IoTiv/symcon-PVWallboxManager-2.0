@@ -497,4 +497,5 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             ]
         ], JSON_UNESCAPED_UNICODE);
     }
+    
 }
