@@ -644,6 +644,13 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                         ['type'=>'Label','caption'=>$msHint],
                     ]
                 ],
+                [
+                    'type'=>'ExpansionPanel','caption'=>'🪲 Debug','items'=>[
+                        ['type'=>'CheckBox','name'=>'DebugPVWM','caption'=>'Modul-Debug (Regellogik)'],
+                        ['type'=>'CheckBox','name'=>'DebugMQTT','caption'=>'MQTT-Rohdaten loggen'],
+                        ['type'=>'Label','caption'=>'Ausgabe im Meldungen-Fenster.']
+                    ]
+                ],
             ],
             'actions'=>[
                 ['type'=>'Label','caption'=>'ℹ️ Hinweise aktualisieren sich nach Speichern.']
