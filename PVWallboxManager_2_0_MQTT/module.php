@@ -305,6 +305,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $wbEff = ($wb > $minWB) ? $wb : 0;
 
         $houseNet   = max(0, $houseTotal - $wbEff);
+        $houseNet   = max(0, $houseTotal - $wbEff - max(0, $batt)); // Batterie-Laden rausrechnen
         $this->SetValueSafe('HouseNet_W', (int)round($houseNet));
         $surplusRaw = max(0, $pv - $houseNet - max(0, $batt));
 
@@ -509,15 +510,17 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     public function RecalcHausverbrauchAbzWallbox(bool $withLog = true): void
     {
         // Eingänge: Haus gesamt (inkl. WB), WB-Leistung (W)
-        $houseTotal = $this->readVarWUnit('VarHouse_ID', 'VarHouse_Unit');
+        $houseTotal = $this->readVarWUnit('VarHouse_ID','VarHouse_Unit');
         $wb         = max(0, $this->getWBPowerW());
-        $minWB      = max(0, (int)$this->ReadPropertyInteger('WBSubtractMinW')); // z.B. 100 W
+        $minWB      = max(0, (int)$this->ReadPropertyInteger('WBSubtractMinW'));
+        $wbEff      = ($wb > $minWB) ? $wb : 0;
 
-        // WB nur abziehen, wenn über Schwelle
-        $wbEff    = ($wb > $minWB) ? $wb : 0;
-        $houseNet = max(0, (int)round($houseTotal - $wbEff));
+        // Batterie (ggf. Vorzeichen drehen)
+        $batt = $this->readVarWUnit('VarBattery_ID','VarBattery_Unit');
+        if (!$this->ReadPropertyBoolean('BatteryPositiveIsCharge')) { $batt = -$batt; }
 
-        // Schreiben
+        // Haus ohne WB und ohne Batterie-Laden
+        $houseNet = max(0, (int)round($houseTotal - $wbEff - max(0, $batt)));
         $this->SetValueSafe('HouseNet_W', $houseNet);
 
         // (Optional) Kompatibilitäts-Variable, falls es sie noch gibt
