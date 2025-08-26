@@ -120,8 +120,10 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         // --- Timer ---
         $this->RegisterTimer('LOOP', 0, $this->modulePrefix().'_Loop($_IPS["TARGET"]);'); // bleibt vorhanden, aber in Slow aus
-        $this->RegisterTimer('SLOW_TickUI', 0, $this->modulePrefix().'_SLOW_TickUI($_IPS["TARGET"]);');
-        $this->RegisterTimer('SLOW_TickControl', 0, $this->modulePrefix().'_SLOW_TickControl($_IPS["TARGET"]);');
+        //$this->RegisterTimer('SLOW_TickUI', 0, $this->modulePrefix().'_SLOW_TickUI($_IPS["TARGET"]);');
+        $this->RegisterTimer('SLOW_TickUI', 0, 'IPS_RequestAction($_IPS["TARGET"], "DoSlowTickUI", 0);');
+        $this->RegisterTimer('SLOW_TickControl', 0, 'IPS_RequestAction($_IPS["TARGET"], "DoSlowTickControl", 0);');
+        //$this->RegisterTimer('SLOW_TickControl', 0, $this->modulePrefix().'_SLOW_TickControl($_IPS["TARGET"]);');
     }
 
     public function ApplyChanges()
@@ -214,6 +216,12 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 $this->sendSet('frc', (string)$frc);
                 $this->SetValueSafe('FRC', $frc);
                 break;
+            case 'DoSlowTickUI':
+                $this->SLOW_TickUI();
+                return;
+            case 'DoSlowTickControl':
+                $this->SLOW_TickControl();
+                return;
         }
     }
 
