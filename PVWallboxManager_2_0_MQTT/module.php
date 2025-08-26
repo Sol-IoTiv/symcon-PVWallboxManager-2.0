@@ -385,29 +385,21 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         $connected = in_array($car, [1,2,3,4], true);
         $charging  = $this->isChargingActive();
-/*
-        // Effektive Phasen aus NRG
-        $phDeclared = ($pm === 2) ? 3 : 1;
-        $phEffAttr  = (int)$this->ReadAttributeInteger('WB_ActivePhases') ?: $phDeclared;
-        $ph         = min($phDeclared, max(1, $phEffAttr)); // 1/2/3
-*/
+
         // dynamische Mindestleistungen
-        $minP1 = $minA * $U * 1 + $resW;
-        $minP2 = $minA * $U * 2 + $resW;
-        $minP3 = $minA * $U * 3 + $resW;
-        $minP = $minA * $U * $phEff + $resW;
+        $minP_eff = $minA * $U * $phEff + $resW;   // effektive Mindestleistung
+        $minP_1p  = $minA * $U * 1      + $resW;   // 1-ph Referenz
         $this->dbgLog('StartCheck', sprintf(
-            'car=%d connected=%s charging=%s pm=%d phEff=%d startOk=%d stopOk=%d offHold=%s onHold=%s surplus=%dW minP(%dp)=%dW',
+            'car=%d connected=%s charging=%s pm=%d phEff=%d startOk=%d stopOk=%d offHold=%s onHold=%s surplus=%dW minP_eff=%dW',
             $car, $connected?'ja':'nein', $charging?'ja':'nein', $pm, $phEff, $startOk, $stopOk,
-            $offHold?'Warte':'ok', $onHold?'Warte':'ok', $surplus, $phEff, $minP
+            $offHold?'Warte':'ok', $onHold?'Warte':'ok', $surplus, $minP_eff
         ));
 
-        // 3ph→1ph für Start, wenn eff. Phasen nicht reichen, 1p aber reicht
-        if ($connected && !$charging && $pm === 2 && $holdOver && $surplus < $minP && $surplus >= ($minA*$U*1 + $resW)) {
+        // 3p → 1p Starthilfe:
+        if ($connected && !$charging && $pm === 2 && $holdOver && $surplus < $minP_eff && $surplus >= $minP_1p) {
             $this->sendSet('psm', '1');
             $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
             $this->WriteAttributeInteger('LastPhaseMode', 1);
-            $this->dbgChanged('Phasenmodus', '3-phasig', '1-phasig (für Start)');
             return;
         }
 
@@ -438,7 +430,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         }
 
         // START
-        if (!$charging && $connected && $startOk && !$offHold && $surplus >= $minP) {
+        if (!$charging && $connected && $startOk && !$offHold && $surplus >= $minP_eff) {
             $this->sendSet('frc', '2');
             $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
             $this->WriteAttributeInteger('CntStart', 0);
