@@ -55,7 +55,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterPropertyInteger('NominalVolt', 230);   // pro Phase
         $this->RegisterPropertyInteger('MinHoldAfterPhaseMs', 30000); // Sperrzeit nach psm-Wechsel
         $this->RegisterPropertyInteger('MinPublishGapMs', 2000);      // Mindestabstand amp/set
-        $this->RegisterPropertyInteger('WBSubtractMinW', 100); 
+        $this->RegisterPropertyInteger('WBSubtractMinW', 100);
 
         //// Start-Reserve in Watt (Sicherheitsmarge über MinAmp)
         $this->RegisterPropertyInteger('StartReserveW', 200); // z.B. 200W
@@ -68,6 +68,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterAttributeInteger('LastFrcChangeMs', 0);
         $this->RegisterAttributeString('MQTT_BUF', '{}');
 
+        $this->RegisterAttributeInteger('WB_ActivePhases', 0);
 
         // Profile sicherstellen
         $this->ensureProfiles();
@@ -227,7 +228,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     public function Loop(): void
     {
         // --- Lademodus prüfen ---
-        $this->SetTimerInterval('LOOP', 0); // ganz oben
+        $this->SetTimerInterval('LOOP', 0);
         $mode  = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV, 1=Manuell, 2=Aus
         $nowMs = (int)(microtime(true) * 1000);
         $lastFR = $this->lastFrcChangeMs();
@@ -238,7 +239,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             try { $this->parseAndStoreNRG($nrg); } catch (\Throwable $e) { $this->dbgLog('NRG', 'Parse-Fehler: '.$e->getMessage()); }
         }
 
-        // AUS: Force-Off erzwingen und raus
+        // AUS
         if ($mode === 2) {
             $frcCur = (int)@GetValue(@$this->GetIDForIdent('FRC'));
             if ($frcCur !== 1) {
@@ -252,8 +253,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             $this->WriteAttributeInteger('CntTo3p',  0);
             return;
         }
-    
-        // MANUELL: Phasen + Ampere durchsetzen, Force-On, dann raus
+
+        // MANUELL
         if ($mode === 1) {
             $holdMs   = (int)$this->ReadPropertyInteger('MinHoldAfterPhaseMs');
             $lastSw   = (int)$this->ReadAttributeInteger('LastPhaseSwitchMs');
@@ -268,7 +269,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 $this->sendSet('psm', (string)$pmWanted);
                 $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
                 $this->WriteAttributeInteger('LastPhaseMode', $pmWanted);
-            } elseif (!$holdOver) {
+            } else if (!$holdOver) {
                 $this->dbgLog('Lademodus', 'Phasenwechsel-Sperrzeit aktiv – psm bleibt vorerst');
             }
 
@@ -289,64 +290,52 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
                 $this->dbgLog('Lademodus', 'Manuell → Force-On');
             }
-            return; // PV-Logik überspringen
+            return;
         }
 
-        // -------- 1) Eingänge (W), Einheiten pro Quelle skaliert --------
-        $pv         = $this->readVarWUnit('VarPV_ID',     'VarPV_Unit');      // W
-        $houseTotal = $this->readVarWUnit('VarHouse_ID',  'VarHouse_Unit');   // W (GESAMT inkl. WB)
-        $batt       = $this->readVarWUnit('VarBattery_ID','VarBattery_Unit'); // W (optional)
-        if (!$this->ReadPropertyBoolean('BatteryPositiveIsCharge')) {
-            $batt = -$batt; // + = Laden, - = Entladen
-        }
+        // -------- 1) Eingänge --------
+        $pv         = $this->readVarWUnit('VarPV_ID',     'VarPV_Unit');
+        $houseTotal = $this->readVarWUnit('VarHouse_ID',  'VarHouse_Unit');
+        $batt       = $this->readVarWUnit('VarBattery_ID','VarBattery_Unit');
+        if (!$this->ReadPropertyBoolean('BatteryPositiveIsCharge')) $batt = -$batt;
 
-        // Wallbox-Leistung (aus nrg → Leistung_W), nur > Schwelle abziehen
+        // WB-Leistung
         $wb    = max(0, $this->getWBPowerW());
-        $minWB = max(0, (int)$this->ReadPropertyInteger('WBSubtractMinW')); // z.B. 100 W
+        $minWB = max(0, (int)$this->ReadPropertyInteger('WBSubtractMinW'));
         $wbEff = ($wb > $minWB) ? $wb : 0;
 
-        $houseNet = max(0, $houseTotal - $wbEff);
+        $houseNet   = max(0, $houseTotal - $wbEff);
         $this->SetValueSafe('HouseNet_W', (int)round($houseNet));
-
-        // Überschuss (ROH) = PV - Haus(ohne WB) - Batterie(Ladeleistung)
         $surplusRaw = max(0, $pv - $houseNet - max(0, $batt));
 
-        // -------- 1a) Glättung (EMA) gegen Flattern --------
+        // -------- 1a) Glättung --------
         $alphaPermille = (int)$this->ReadPropertyInteger('SmoothAlphaPermille');
-        if ($alphaPermille <= 0) { $alphaPermille = 350; } // Default 0.35, falls Property (noch) fehlt
+        if ($alphaPermille <= 0) { $alphaPermille = 350; }
         $alpha = min(1.0, max(0.0, $alphaPermille / 1000.0));
         $prevSmooth = (int)$this->ReadAttributeInteger('SmoothSurplusW');
         $surplus = (int)round($alpha * $surplusRaw + (1.0 - $alpha) * $prevSmooth);
         $this->WriteAttributeInteger('SmoothSurplusW', $surplus);
 
-        $this->dbgLog(
-            'Bilanz',
-            sprintf(
-                'PV=%dW, HausGes=%dW, WB=%dW (> %dW? %s), HausNet=%dW, Batt=%+dW, Überschuss roh=%dW, glatt=%dW (α=%.2f)',
-                (int)$pv, (int)$houseTotal, (int)$wb, (int)$minWB, ($wbEff>0?'ja':'nein'),
-                (int)$houseNet, (int)$batt, (int)$surplusRaw, (int)$surplus, $alpha
-            )
-        );
+        $this->dbgLog('Bilanz', sprintf(
+            'PV=%dW, HausGes=%dW, WB=%dW (> %dW? %s), HausNet=%dW, Batt=%+dW, Überschuss roh=%dW, glatt=%dW (α=%.2f)',
+            (int)$pv, (int)$houseTotal, (int)$wb, (int)$minWB, ($wbEff>0?'ja':'nein'),
+            (int)$houseNet, (int)$batt, (int)$surplusRaw, (int)$surplus, $alpha
+        ));
 
-        // -------- 2) aktuelle Zustände --------
-        $pm  = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')) ?: 1; // 1=1ph, 2=3ph
+        // -------- 2) Zustände --------
+        $pm  = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')) ?: 1; // 1=1p, 2=3p
         $car = (int)@GetValue(@$this->GetIDForIdent('CarState')) ?: 0;
 
-        // -------- 3) Start/Stop-Hysterese (mit Counter-Decrement im Band) --------
+        // -------- 3) Start/Stop-Hysterese --------
         $startW = (int)$this->ReadPropertyInteger('StartThresholdW');
         $stopW  = (int)$this->ReadPropertyInteger('StopThresholdW');
         $cStart = (int)$this->ReadAttributeInteger('CntStart');
         $cStop  = (int)$this->ReadAttributeInteger('CntStop');
 
-        if ($surplus >= $startW) {
-            $cStart++; $cStop = max(0, $cStop - 1);
-        } elseif ($surplus <= $stopW) {
-            $cStop++;  $cStart = max(0, $cStart - 1);
-        } else {
-            // im Band beide leicht abbauen → verhindert „Sägezahn“
-            $cStart = max(0, $cStart - 1);
-            $cStop  = max(0, $cStop  - 1);
-        }
+        if ($surplus >= $startW) { $cStart++; $cStop = max(0, $cStop - 1); }
+        elseif ($surplus <= $stopW) { $cStop++;  $cStart = max(0, $cStart - 1); }
+        else { $cStart = max(0, $cStart - 1); $cStop = max(0, $cStop - 1); }
+
         $this->WriteAttributeInteger('CntStart', $cStart);
         $this->WriteAttributeInteger('CntStop',  $cStop);
 
@@ -373,7 +362,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             if ($pm === 2 && $c1p >= (int)$this->ReadPropertyInteger('To1pCycles')) $targetPM = 1;
             if ($pm === 1 && $c3p >= (int)$this->ReadPropertyInteger('To3pCycles')) $targetPM = 2;
         }
-
         if ($targetPM !== $pm) {
             $this->sendSet('psm', (string)$targetPM);
             $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
@@ -382,9 +370,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             return;
         }
 
-        // -------- 5) Start/Stop + Ampere (mit MinOn/Off-Wächter & sanftem Ramping) --------
+        // -------- 5) Start/Stop + Ampere --------
         $U      = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
-        $ph     = ($pm === 2) ? 3 : 1;
         [$minA, $maxA] = $this->ampRange();
         $resW   = (int)$this->ReadPropertyInteger('StartReserveW');
 
@@ -394,18 +381,25 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $connected = in_array($car, [1,2,3,4], true);
         $charging  = $this->isChargingActive();
 
+        // Effektive Phasen aus NRG
+        $phDeclared = ($pm === 2) ? 3 : 1;
+        $phEffAttr  = (int)$this->ReadAttributeInteger('WB_ActivePhases') ?: $phDeclared;
+        $ph         = min($phDeclared, max(1, $phEffAttr)); // 1/2/3
+
+        // dynamische Mindestleistungen
         $minP1 = $minA * $U * 1 + $resW;
+        $minP2 = $minA * $U * 2 + $resW;
         $minP3 = $minA * $U * 3 + $resW;
-        $minP  = ($ph === 3) ? $minP3 : $minP1;
+        $minP  = ($ph === 3) ? $minP3 : (($ph === 2) ? $minP2 : $minP1);
 
         $this->dbgLog('StartCheck', sprintf(
-            'car=%d connected=%s charging=%s startOk=%d stopOk=%d offHold=%s onHold=%s surplus(glatt)=%dW minP1=%dW minP3=%dW pm=%d',
-            $car, $connected?'ja':'nein', $charging?'ja':'nein', $startOk, $stopOk,
-            $offHold?'Warte':'ok', $onHold?'Warte':'ok', $surplus, $minP1, $minP3, $pm
+            'car=%d connected=%s charging=%s pm=%d phEff=%d startOk=%d stopOk=%d offHold=%s onHold=%s surplus=%dW minP(%dp)=%dW',
+            $car, $connected?'ja':'nein', $charging?'ja':'nein', $pm, $ph, $startOk, $stopOk,
+            $offHold?'Warte':'ok', $onHold?'Warte':'ok', $surplus, $ph, $minP
         ));
 
-        // 3ph → 1ph für Start, falls 3ph nicht reicht, 1ph jedoch schon (und Sperrzeit vorbei)
-        if ($connected && !$charging && $pm === 2 && $holdOver && $surplus < $minP3 && $surplus >= $minP1) {
+        // 3ph→1ph für Start, wenn eff. Phasen nicht reichen, 1p aber reicht
+        if ($connected && !$charging && $pm === 2 && $holdOver && $surplus < $minP && $surplus >= $minP1) {
             $this->sendSet('psm', '1');
             $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
             $this->WriteAttributeInteger('LastPhaseMode', 1);
@@ -420,7 +414,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
                 $this->dbgLog('Ladung', 'Stop (kein Fahrzeug)');
             }
-            // Zähler zurücksetzen
             $this->WriteAttributeInteger('CntStart', 0);
             $this->WriteAttributeInteger('CntStop',  0);
             $this->WriteAttributeInteger('CntTo1p',  0);
@@ -434,7 +427,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         if ($charging && $stopOk && !$onHold) {
             $this->sendSet('frc', '1');
             $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
-            // Hysterese-Zähler zurücksetzen → kein direktes Gegenereignis
             $this->WriteAttributeInteger('CntStart', 0);
             $this->WriteAttributeInteger('CntStop',  0);
             $this->dbgLog('Ladung', 'Stop (Stop-Hysterese erreicht)');
@@ -445,15 +437,12 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         if (!$charging && $connected && $startOk && !$offHold && $surplus >= $minP) {
             $this->sendSet('frc', '2');
             $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
-            // Hysterese-Zähler zurücksetzen → kein direktes Gegenereignis
             $this->WriteAttributeInteger('CntStart', 0);
             $this->WriteAttributeInteger('CntStop',  0);
-            $this->dbgLog('Ladung', 'Start (Hysterese & Reserve erfüllt, pm=' . ($ph===3?'3-ph':'1-ph') . ')');
+            $this->dbgLog('Ladung', 'Start (Hysterese & Reserve erfüllt, eff. Phasen='.$ph.')');
             $startedNow = true;
-            // kein return: gleich sanft Ampere nachziehen
         }
 
-        // --- Sanftes Ampere-Update: 1A-Schritte, mind. 3–5s Abstand ---
         // --- Sanftes Ampere-Update ---
         $lastPub = (int)$this->ReadAttributeInteger('LastPublishMs');
         $gapMs   = (int)$this->ReadPropertyInteger('MinPublishGapMs');
@@ -461,7 +450,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $vidA    = @$this->GetIDForIdent('Ampere_A');
         $curA    = $vidA ? (int)@GetValue($vidA) : $lastA;
 
-        // Für Amp-Ziel: roh statt glatt, reagiert schneller
+        // schneller reagieren: roh als Basis
         $effSurplus = max(0, $surplusRaw - (int)floor($resW / 2));
         $neededA    = (int)floor($effSurplus / ($U * $ph));
         $setA       = max($minA, min($maxA, $neededA));
@@ -470,8 +459,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $minHoldMs = (int)max(3000, floor($gapMs * 1.5));
         $sincePub  = $nowMs - $lastPub;
 
-        // Wichtig: an charging koppeln, nicht an FRC/startedNow
-        $canRamp = $charging;
+        $canRamp = $charging; // statt FRC/startedNow
 
         if ($canRamp && $sincePub >= $minHoldMs && abs($setA - $curA) >= $minDeltaA) {
             $nextA = ($setA > $curA) ? ($curA + 1) : ($curA - 1);
