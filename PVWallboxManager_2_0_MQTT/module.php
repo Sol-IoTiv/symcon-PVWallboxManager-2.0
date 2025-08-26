@@ -143,6 +143,10 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             return;
         }
 
+        [$min,$max] = $this->ampRange();
+        $this->sendSet('ama', (string)$max);
+        $this->sendSet('amx', (string)$max);
+
         // --- alte Referenzen/Messages aufräumen ---
         $refs = @IPS_GetInstance($this->InstanceID)['References'] ?? [];
         if (is_array($refs)) {
@@ -204,10 +208,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 break;
 
             case 'Ampere_A':
-                [$minA,$maxA] = $this->ampRange();
-                $amp = max($minA, min($maxA, (int)$Value));
-                $this->sendSet('amp', (string)$amp);
-                $this->SetValueSafe('Ampere_A', $amp);
+                $this->setCurrentLimitA((int)$Value);
                 break;
 
             case 'Phasenmodus':
@@ -278,9 +279,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             $lastA   = (int)$this->ReadAttributeInteger('LastAmpSet');
 
             if (($nowMs - $lastPub) >= $gapMs && $aWanted !== $lastA) {
-                $this->sendSet('amp', (string)$aWanted);
-                $this->WriteAttributeInteger('LastAmpSet', $aWanted);
-                $this->WriteAttributeInteger('LastPublishMs', $nowMs);
+                $this->setCurrentLimitA($aWanted);
                 $this->dbgChanged('Ampere', $lastA.' A', $aWanted.' A');
             }
 
@@ -457,7 +456,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         if ($charging && $sincePub >= $minHoldMs && abs($errorW) >= $threshW) {
             $nextA = max($minA, min($maxA, $curA + $step));
             if ($nextA !== $curA) {
-                $this->sendSet('amp', (string)$nextA);
+                $this->setCurrentLimitA($nextA);
                 if ($vidA) @SetValue($vidA, $nextA);
                 $this->WriteAttributeInteger('LastAmpSet',    $nextA);
                 $this->WriteAttributeInteger('LastPublishMs', $nowMs);

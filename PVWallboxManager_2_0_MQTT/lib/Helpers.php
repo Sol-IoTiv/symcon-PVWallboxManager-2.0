@@ -197,7 +197,7 @@ trait Helpers
 
         if ($nextA !== $curA) {
             // hier deine Setz-API:
-            $this->sendSet('amp', (string)$nextA); // oder charger->setChargingCurrent($nextA)
+            $this->setCurrentLimitA($nextA);
             if ($vid) @SetValue($vid, $nextA);
             $this->WriteAttributeInteger('LastAmpChangeMs', $nowMs);
             $this->dbgLog('RAMP', "Ampere: $curA A → $nextA A (Ziel $targetA A)");
@@ -241,6 +241,22 @@ trait Helpers
         if (!(bool)$this->ReadPropertyBoolean('DebugMQTT')) return;
         @ $this->SendDebug('MQTT '.$tag, $line, 0);
         @ IPS_LogMessage($this->modulePrefix().'-MQTT', $line);
+    }
+
+    private function setCurrentLimitA(int $A): void
+    {
+        [$min,$max] = $this->ampRange();
+        $A = max($min, min($max, $A));
+
+        // Limit(s) + Soll schicken
+        $this->sendSet('ama', (string)$A);
+        $this->sendSet('amx', (string)$A);   // falls FW amx nutzt
+        $this->sendSet('amp', (string)$A);   // Pilotstrom / Anzeige
+
+        $nowMs = (int)(microtime(true)*1000);
+        $this->WriteAttributeInteger('LastAmpSet',    $A);
+        $this->WriteAttributeInteger('LastPublishMs', $nowMs);
+        if ($vid = @$this->GetIDForIdent('Ampere_A')) @SetValue($vid, $A);
     }
 
 }
