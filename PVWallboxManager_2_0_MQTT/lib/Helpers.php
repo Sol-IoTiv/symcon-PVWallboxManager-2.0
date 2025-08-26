@@ -243,20 +243,20 @@ trait Helpers
         @ IPS_LogMessage($this->modulePrefix().'-MQTT', $line);
     }
 
-    private function setCurrentLimitA(int $A): void
+    private function setCurrentLimitA(int $amp): void
     {
-        [$min,$max] = $this->ampRange();
-        $A = max($min, min($max, $A));
+        [$minA, $maxA] = $this->ampRange();
+        $amp = max($minA, min($maxA, $amp));
 
-        // Limit(s) + Soll schicken
-        $this->sendSet('ama', (string)$A);
-        $this->sendSet('amx', (string)$A);   // falls FW amx nutzt
-        $this->sendSet('amp', (string)$A);   // Pilotstrom / Anzeige
+        $this->sendSet('amp', (string)$amp);
 
-        $nowMs = (int)(microtime(true)*1000);
-        $this->WriteAttributeInteger('LastAmpSet',    $A);
-        $this->WriteAttributeInteger('LastPublishMs', $nowMs);
-        if ($vid = @$this->GetIDForIdent('Ampere_A')) @SetValue($vid, $A);
+        $this->WriteAttributeInteger('LastAmpSet', $amp);
+        $this->WriteAttributeInteger('LastPublishMs', (int)(microtime(true) * 1000));
+
+        if ($vidA = @$this->GetIDForIdent('Ampere_A')) {
+            @SetValue($vidA, $amp); // Anzeige synchronisieren
+        }
+        $this->dbgLog('setCurrentLimitA', "amp={$amp} A gesendet");
     }
 
 }

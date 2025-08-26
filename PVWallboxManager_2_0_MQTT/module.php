@@ -69,6 +69,9 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterAttributeString('MQTT_BUF', '{}');
 
         $this->RegisterAttributeInteger('WB_ActivePhases', 1);
+        $this->RegisterAttributeInteger('WB_W_Smooth', 0);
+        $this->RegisterAttributeInteger('WB_SubtractActive', 0);
+        $this->RegisterAttributeInteger('WB_SubtractChangedMs', 0);
 
         // Profile sicherstellen
         $this->ensureProfiles();
@@ -307,7 +310,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->SetValueSafe('HouseNet_W', (int)round($houseNet));
         $surplusRaw = max(0, $pv - $houseNet);
 
-
         // -------- 1a) Glättung --------
         $alphaPermille = (int)$this->ReadPropertyInteger('SmoothAlphaPermille');
         if ($alphaPermille <= 0) { $alphaPermille = 350; }
@@ -468,6 +470,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         }
     }
 
+
     public function ApplyDetectedBaseTopic(): void
     {
         $auto = trim($this->ReadAttributeString('AutoBaseTopic'));
@@ -497,15 +500,40 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
      */
     public function RecalcHausverbrauchAbzWallbox(bool $withLog = true): void
     {
-        // Eingänge: Haus gesamt (inkl. WB), WB-Leistung (W)
         $houseTotal = $this->readVarWUnit('VarHouse_ID','VarHouse_Unit');
-        $wb         = max(0, $this->getWBPowerW());
+        $wbRaw      = max(0, $this->getWBPowerW());
         $minWB      = max(0, (int)$this->ReadPropertyInteger('WBSubtractMinW'));
-        $wbEff      = ($wb > $minWB) ? $wb : 0;
 
-        // Batterie (ggf. Vorzeichen drehen)
         $batt = $this->readVarWUnit('VarBattery_ID','VarBattery_Unit');
         if (!$this->ReadPropertyBoolean('BatteryPositiveIsCharge')) { $batt = -$batt; }
+
+        // --- WB Glättung (EMA) ---
+        $alphaWB   = 0.4; // dezent, keine Property nötig
+        $wbPrev    = (int)$this->ReadAttributeInteger('WB_W_Smooth');
+        $wbSmooth  = (int)round($alphaWB * $wbRaw + (1.0 - $alphaWB) * $wbPrev);
+        $this->WriteAttributeInteger('WB_W_Smooth', $wbSmooth);
+
+        // --- Hysterese für "WB abziehen?" (On/Off um die Min-Schwelle) ---
+        $onW   = $minWB;           // ab hier aktivieren
+        $offW  = (int)max(0,$minWB - 120); // hier wieder deaktivieren
+        $active = (int)$this->ReadAttributeInteger('WB_SubtractActive') === 1;
+        $lastChg= (int)$this->ReadAttributeInteger('WB_SubtractChangedMs');
+        $nowMs  = (int)(microtime(true)*1000);
+        $holdMs = 4000; // Wechsel- Sperrzeit
+
+        if ($active) {
+            if ($wbSmooth <= $offW && ($nowMs - $lastChg) >= $holdMs) {
+                $active = false; $this->WriteAttributeInteger('WB_SubtractChangedMs', $nowMs);
+            }
+        } else {
+            if ($wbSmooth >= $onW && ($nowMs - $lastChg) >= $holdMs) {
+                $active = true;  $this->WriteAttributeInteger('WB_SubtractChangedMs', $nowMs);
+            }
+        }
+        $this->WriteAttributeInteger('WB_SubtractActive', $active ? 1 : 0);
+
+        // nur wenn aktiv, dann *geglättete* WB-Leistung abziehen
+        $wbEff    = $active ? $wbSmooth : 0;
 
         // Haus ohne WB und ohne Batterie-Laden
         $houseNet = max(0, (int)round($houseTotal - $wbEff - max(0, $batt)));
