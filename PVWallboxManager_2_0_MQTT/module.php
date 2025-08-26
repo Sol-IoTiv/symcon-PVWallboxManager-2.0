@@ -54,7 +54,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterPropertyInteger('MaxAmp', 16);         // ggf. 32 je nach Box
         $this->RegisterPropertyInteger('NominalVolt', 230);   // pro Phase
         $this->RegisterPropertyInteger('MinHoldAfterPhaseMs', 30000); // Sperrzeit nach psm-Wechsel
-        $this->RegisterPropertyInteger('MinPublishGapMs', 2000);      // Mindestabstand ama/set
+        $this->RegisterPropertyInteger('MinPublishGapMs', 2000);      // Mindestabstand amp/set
         $this->RegisterPropertyInteger('WBSubtractMinW', 100); 
 
         //// Start-Reserve in Watt (Sicherheitsmarge über MinAmp)
@@ -66,6 +66,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         //// Zeitpunkt letzte FRC-Änderung
         $this->RegisterAttributeInteger('LastFrcChangeMs', 0);
+        $this->RegisterAttributeString('MQTT_BUF', '{}');
+
 
         // Profile sicherstellen
         $this->ensureProfiles();
@@ -120,6 +122,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     {
         parent::ApplyChanges();
 
+        $this->attachAndSubscribe();
+
         // --- GoE.Amp-Profil an Properties anpassen ---
         [$minA, $maxA] = $this->ampRange();
         if (IPS_VariableProfileExists('GoE.Amp')) {
@@ -172,10 +176,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RecalcHausverbrauchAbzWallbox(true);
         $this->Loop();
 
-        $pid = (int)$this->ReadPropertyInteger('MQTTServerID');
-        if ($pid > 0 && @IPS_InstanceExists($pid)) @IPS_SetParent($this->InstanceID, $pid);
-        $this->mqttSubscribeAll();
-
         $this->SetStatus(IS_ACTIVE);
     }
 
@@ -207,7 +207,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             case 'Ampere_A':
                 [$minA,$maxA] = $this->ampRange();
                 $amp = max($minA, min($maxA, (int)$Value));
-                $this->sendSet('ama', (string)$amp);
+                $this->sendSet('amp', (string)$amp);
                 $this->SetValueSafe('Ampere_A', $amp);
                 break;
 
@@ -573,54 +573,78 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     public function GetConfigurationForm()
     {
         $U    = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
-        $minA = (int)$this->ReadPropertyInteger('MinAmpere');
-        $maxA = (int)$this->ReadPropertyInteger('MaxAmpere');
-        $thr3 = 3 * $minA * $U;
-        $thr1 = $maxA * $U;
-
+        $minA = (int)$this->ReadPropertyInteger('MinAmp');
+        $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
+        $thr3 = 3 * max(1,$minA) * $U;
+        $thr1 = max(1,$maxA) * $U;
         $msHint = "⏱ 1 000 ms = 1 s · 10 000 ms = 10 s · 30 000 ms = 30 s";
 
         return json_encode([
             'elements' => [
                 [
-                    'type'=>'ExpansionPanel','caption'=>'🔌 Wallbox','items'=>[
-                        ['type'=>'SelectInstance','name'=>'MQTTServerID','caption'=>'MQTT-Gateway'],
-                        ['type'=>'ValidationTextBox','name'=>'MQTTBaseTopic','caption'=>'Base-Topic (z. B. go-eCharger/285450)'],
+                    'type'=>'ExpansionPanel','caption'=>'🔌 Wallbox Konfiguration','items'=>[
+                        ['type'=>'ValidationTextBox','name'=>'BaseTopic','caption'=>'Base-Topic (z. B. go-eCharger/285450)'],
+                        ['type'=>'ValidationTextBox','name'=>'DeviceIDFilter','caption'=>'Device-ID Filter (optional)'],
                         ['type'=>'RowLayout','items'=>[
-                            ['type'=>'SpinBox','name'=>'MinAmpere','caption'=>'Min. Ampere','minimum'=>6,'maximum'=>32,'suffix'=>' A'],
-                            ['type'=>'SpinBox','name'=>'MaxAmpere','caption'=>'Max. Ampere','minimum'=>6,'maximum'=>32,'suffix'=>' A'],
+                            ['type'=>'SpinBox','name'=>'MinAmp','caption'=>'Min. Ampere','minimum'=>1,'maximum'=>32,'suffix'=>' A'],
+                            ['type'=>'SpinBox','name'=>'MaxAmp','caption'=>'Max. Ampere','minimum'=>1,'maximum'=>32,'suffix'=>' A'],
                             ['type'=>'NumberSpinner','name'=>'NominalVolt','caption'=>'Netzspannung','minimum'=>200,'maximum'=>245,'suffix'=>' V'],
                         ]],
-                        ['type'=>'ComboBox','name'=>'PhaseMode','caption'=>'Phasenmodus','options'=>[
-                            ['caption'=>'Auto','value'=>'auto'],
-                            ['caption'=>'1-phasig','value'=>'1p'],
-                            ['caption'=>'3-phasig','value'=>'3p'],
-                        ]],
-                        ['type'=>'NumberSpinner','name'=>'MinHoldAfterPhaseMs','caption'=>'Sperrzeit Phasenwechsel','suffix'=>' ms'],
-                        ['type'=>'Label','caption'=>"⚙️ Auto: 3-ph ab ≈ {$thr3} W · 1-ph unter ≈ {$thr1} W"],
+                        ['type'=>'NumberSpinner','name'=>'MinHoldAfterPhaseMs','caption'=>'Sperrzeit Phasenwechsel','suffix'=>' ms','hint'=>$msHint],
+                        ['type'=>'Label','caption'=>"⚙️ Richtwerte: 3-ph Start ab ≈ {$thr3} W · 1-ph unter ≈ {$thr1} W"],
                     ]
                 ],
                 [
-                    'type'=>'ExpansionPanel','caption'=>'🧠 Intelligente Logik','items'=>[
-                        ['type'=>'NumberSpinner','name'=>'StartThresholdW','caption'=>'Start bei PV-Überschuss','suffix'=>' W','hint'=>'Ab diesem Überschuss wird freigegeben.'],
-                        ['type'=>'NumberSpinner','name'=>'StopThresholdW','caption'=>'Stop bei Defizit','suffix'=>' W','hint'=>'Unter diesem Wert wird gestoppt.'],
+                    'type'=>'ExpansionPanel','caption'=>'⚡ Eingänge','items'=>[
+                        ['type'=>'SelectVariable','name'=>'VarPV_ID','caption'=>'PV-Leistung'],
+                        ['type'=>'SelectVariable','name'=>'VarHouse_ID','caption'=>'Haus gesamt (inkl. WB)'],
+                        ['type'=>'SelectVariable','name'=>'VarBattery_ID','caption'=>'Batterie (optional)'],
+                        ['type'=>'RowLayout','items'=>[
+                            ['type'=>'Select','name'=>'VarPV_Unit','caption'=>'PV Einheit','options'=>[
+                                ['caption'=>'W','value'=>'W'],['caption'=>'kW','value'=>'kW']]],
+                            ['type'=>'Select','name'=>'VarHouse_Unit','caption'=>'Haus Einheit','options'=>[
+                                ['caption'=>'W','value'=>'W'],['caption'=>'kW','value'=>'kW']]],
+                            ['type'=>'Select','name'=>'VarBattery_Unit','caption'=>'Batt Einheit','options'=>[
+                                ['caption'=>'W','value'=>'W'],['caption'=>'kW','value'=>'kW']]],
+                        ]],
+                        ['type'=>'CheckBox','name'=>'BatteryPositiveIsCharge','caption'=>'+ bedeutet Laden'],
+                        ['type'=>'NumberSpinner','name'=>'WBSubtractMinW','caption'=>'WB-Abzug ab','suffix'=>' W','hint'=>'WB-Leistung erst ab diesem Wert vom Hausverbrauch abziehen'],
+                        ['type'=>'NumberSpinner','name'=>'SmoothAlphaPermille','caption'=>'Glättung α · 0..1000','suffix'=>' ‰','hint'=>'350 ≈ 0,35'],
+                    ]
+                ],
+                [
+                    'type'=>'ExpansionPanel','caption'=>'🧠 Regellogik','items'=>[
+                        ['type'=>'RowLayout','items'=>[
+                            ['type'=>'NumberSpinner','name'=>'StartThresholdW','caption'=>'Start-Schwelle','suffix'=>' W'],
+                            ['type'=>'NumberSpinner','name'=>'StopThresholdW','caption'=>'Stop-Schwelle','suffix'=>' W'],
+                        ]],
                         ['type'=>'RowLayout','items'=>[
                             ['type'=>'SpinBox','name'=>'StartCycles','caption'=>'Start-Zyklen','minimum'=>1,'maximum'=>20],
                             ['type'=>'SpinBox','name'=>'StopCycles','caption'=>'Stop-Zyklen','minimum'=>1,'maximum'=>20],
                         ]],
+                        ['type'=>'RowLayout','items'=>[
+                            ['type'=>'NumberSpinner','name'=>'ThresTo1p_W','caption'=>'→ 1-ph unter','suffix'=>' W'],
+                            ['type'=>'SpinBox','name'=>'To1pCycles','caption'=>'Zyklen'],
+                            ['type'=>'NumberSpinner','name'=>'ThresTo3p_W','caption'=>'→ 3-ph über','suffix'=>' W'],
+                            ['type'=>'SpinBox','name'=>'To3pCycles','caption'=>'Zyklen'],
+                        ]],
+                        ['type'=>'NumberSpinner','name'=>'StartReserveW','caption'=>'Start-Reserve','suffix'=>' W'],
                     ]
                 ],
                 [
-                    'type'=>'ExpansionPanel','caption'=>'🔧 Erweitert','items'=>[
-                        ['type'=>'NumberSpinner','name'=>'MinPublishGapMs','caption'=>'Mindestabstand Befehle','suffix'=>' ms'],
-                        ['type'=>'NumberSpinner','name'=>'MinOnTimeMs','caption'=>'Min. EIN-Zeit FRC','suffix'=>' ms'],
-                        ['type'=>'NumberSpinner','name'=>'MinOffTimeMs','caption'=>'Min. AUS-Zeit FRC','suffix'=>' ms'],
-                        ['type'=>'Label','caption'=>$msHint],
+                    'type'=>'ExpansionPanel','caption'=>'🔧 Ramping & Zeiten','items'=>[
+                        ['type'=>'NumberSpinner','name'=>'MinPublishGapMs','caption'=>'Mindestabstand amp/set','suffix'=>' ms','hint'=>$msHint],
+                        ['type'=>'NumberSpinner','name'=>'RampHoldMs','caption'=>'Ramping-Haltezeit','suffix'=>' ms','hint'=>$msHint],
+                        ['type'=>'SpinBox','name'=>'RampStepA','caption'=>'Ramping-Schritt','minimum'=>1,'maximum'=>5,'suffix'=>' A'],
+                        ['type'=>'RowLayout','items'=>[
+                            ['type'=>'NumberSpinner','name'=>'MinOnTimeMs','caption'=>'Min. EIN-Zeit','suffix'=>' ms','hint'=>$msHint],
+                            ['type'=>'NumberSpinner','name'=>'MinOffTimeMs','caption'=>'Min. AUS-Zeit','suffix'=>' ms','hint'=>$msHint],
+                        ]],
                     ]
                 ],
             ],
             'actions'=>[
-                ['type'=>'Label','caption'=>'📊 Hinweise werden mit aktuellen Werten nach Speichern angezeigt.']
+                ['type'=>'Label','caption'=>'ℹ️ Hinweise aktualisieren sich nach Speichern.']
             ]
         ], JSON_UNESCAPED_UNICODE);
     }

@@ -197,7 +197,7 @@ trait Helpers
 
         if ($nextA !== $curA) {
             // hier deine Setz-API:
-            $this->sendSet('ama', (string)$nextA); // oder charger->setChargingCurrent($nextA)
+            $this->sendSet('amp', (string)$nextA); // oder charger->setChargingCurrent($nextA)
             if ($vid) @SetValue($vid, $nextA);
             $this->WriteAttributeInteger('LastAmpChangeMs', $nowMs);
             $this->dbgLog('RAMP', "Ampere: $curA A → $nextA A (Ziel $targetA A)");
