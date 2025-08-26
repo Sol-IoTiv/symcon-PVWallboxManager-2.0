@@ -68,7 +68,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterAttributeInteger('LastFrcChangeMs', 0);
         $this->RegisterAttributeString('MQTT_BUF', '{}');
 
-        $this->RegisterAttributeInteger('WB_ActivePhases', 0);
+        $this->RegisterAttributeInteger('WB_ActivePhases', 1);
 
         // Profile sicherstellen
         $this->ensureProfiles();
@@ -370,9 +370,9 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             return;
         }
 
-        $phEff = (int)$this->ReadAttributeInteger('PhasesEffective');
+        $phEff = (int)$this->ReadAttributeInteger('WB_ActivePhases');
         if ($phEff < 1 || $phEff > 3) {
-            $phEff = ($pm === 2) ? 3 : 1; // Fallback
+            $phEff = ($pm === 2) ? 3 : 1; // Fallback auf deklarierten Kontaktor
         }
 
         // -------- 5) Start/Stop + Ampere --------
@@ -385,12 +385,12 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         $connected = in_array($car, [1,2,3,4], true);
         $charging  = $this->isChargingActive();
-
+/*
         // Effektive Phasen aus NRG
         $phDeclared = ($pm === 2) ? 3 : 1;
         $phEffAttr  = (int)$this->ReadAttributeInteger('WB_ActivePhases') ?: $phDeclared;
         $ph         = min($phDeclared, max(1, $phEffAttr)); // 1/2/3
-
+*/
         // dynamische Mindestleistungen
         $minP1 = $minA * $U * 1 + $resW;
         $minP2 = $minA * $U * 2 + $resW;
@@ -403,7 +403,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         ));
 
         // 3ph→1ph für Start, wenn eff. Phasen nicht reichen, 1p aber reicht
-        if ($connected && !$charging && $pm === 2 && $holdOver && $surplus < $minP && $surplus >= $minP1) {
+        if ($connected && !$charging && $pm === 2 && $holdOver && $surplus < $minP && $surplus >= ($minA*$U*1 + $resW)) {
             $this->sendSet('psm', '1');
             $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
             $this->WriteAttributeInteger('LastPhaseMode', 1);
@@ -443,7 +443,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
             $this->WriteAttributeInteger('CntStart', 0);
             $this->WriteAttributeInteger('CntStop',  0);
-            $this->dbgLog('Ladung', 'Start (Hysterese & Reserve erfüllt, eff. Phasen='.$ph.')');
+            $this->dbgLog('Ladung', 'Start (Hysterese & Reserve erfüllt, eff. Phasen='.$phEff.')');
             $startedNow = true;
         }
 
@@ -456,7 +456,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         // schneller reagieren: roh als Basis
         $effSurplus = max(0, $surplusRaw - (int)floor($resW / 2));
-        $neededA    = (int)floor($effSurplus / ($U * max(1, $phEff)));
+        $neededA    = (int)floor($effSurplus / ($U * max(1,$phEff)));
         $setA       = max($minA, min($maxA, $neededA));
 
         $minDeltaA = ($maxA - $minA) <= 6 ? 1 : 2;
