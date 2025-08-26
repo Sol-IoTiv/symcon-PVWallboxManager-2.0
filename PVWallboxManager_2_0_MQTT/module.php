@@ -280,82 +280,76 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     // -------------------------
     // Slow: Regelung (alle X s) – ±1 A Richtung Ziel
     // -------------------------
-    public function SLOW_TickControl(): void
+    public function SLOW_TickUI(): void
     {
-        if (!(bool)@GetValue(@$this->GetIDForIdent('SlowControlActive'))) return;
-        $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV, 1=Manuell, 2=Aus
-        if ($mode === 2) return;
+        // Zeit
+        $this->SetValueSafe('Uhrzeit', time());
 
-        $nowMs   = (int)(microtime(true)*1000);
-        $gapMs   = (int)$this->ReadPropertyInteger('MinPublishGapMs');
-        $lastPub = (int)$this->ReadAttributeInteger('LastPublishMs');
-        if ($nowMs - $lastPub < $gapMs) return;
+        // Eingänge
+        $pv = (int)round((float)$this->readVarWUnit('VarPV_ID','VarPV_Unit'));
+        $houseNetVid = @$this->GetIDForIdent('HouseNet_W');
+        $houseNet = $houseNetVid ? (int)@GetValue($houseNetVid) : 0;
+        $surplusRaw = max(0, $pv - $houseNet);
 
-        // Überschuss aus dem 1-Hz-Tick
-        $surplus = (int)$this->ReadAttributeInteger('SmoothSurplusW');
+        // Glättung für Live-Ziel
+        $alpha = min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0));
+        $prev  = (int)$this->ReadAttributeInteger('SmoothSurplusW');
+        $surplus = (int)round($alpha*$surplusRaw + (1.0-$alpha)*$prev);
+        $this->WriteAttributeInteger('SmoothSurplusW', $surplus);
 
-        // Hysterese zählen
-        $startW = (int)$this->ReadPropertyInteger('StartThresholdW');
-        $stopW  = (int)$this->ReadPropertyInteger('StopThresholdW');
-        $cStart = (int)$this->ReadAttributeInteger('CntStart');
-        $cStop  = (int)$this->ReadAttributeInteger('CntStop');
-
-        if ($surplus >= $startW) { $cStart++; $cStop = 0; }
-        elseif ($surplus <= $stopW) { $cStop++; $cStart = 0; }
-        else { $cStart = 0; $cStop = 0; }
-
-        $this->WriteAttributeInteger('CntStart', $cStart);
-        $this->WriteAttributeInteger('CntStop',  $cStop);
-
-        $startOk = $cStart >= (int)$this->ReadPropertyInteger('StartCycles');
-        $stopOk  = $cStop  >= (int)$this->ReadPropertyInteger('StopCycles');
-
-        // Mindestlaufzeiten für FRC
-        $lastFR  = (int)$this->ReadAttributeInteger('LastFrcChangeMs');
-        $onHold  = ($nowMs - $lastFR) < (int)$this->ReadPropertyInteger('MinOnTimeMs');
-        $offHold = ($nowMs - $lastFR) < (int)$this->ReadPropertyInteger('MinOffTimeMs');
-
-        $frcCur = (int)@GetValue(@$this->GetIDForIdent('FRC'));
-
-        // STOP bei fehlendem Überschuss
-        if ($stopOk && !$onHold && $frcCur !== 1) {
-            $this->sendSet('frc', '1');
-            $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
-            $this->dbgLog('SLOW', 'FRC=Stop (kein Überschuss)');
-            return;
-        }
-
-        // START bei ausreichend Überschuss
-        if ($startOk && !$offHold && $frcCur !== 2) {
-            $this->sendSet('frc', '2');
-            $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
-            $this->dbgLog('SLOW', 'FRC=Start (Überschuss vorhanden)');
-            // kein return: danach ggf. Amp an Ziel annähern
-        }
-
-        // Nur regeln, wenn Laden erzwungen/aktiv
-        if ((int)@GetValue(@$this->GetIDForIdent('FRC')) !== 2) return;
-
-        // Ziel-Amp aus 1-Hz-Tick
-        $targetA = (int)$this->ReadAttributeInteger('Slow_LastCalcA');
-        if ($targetA <= 0) return;
-
+        // Phasen/Netz
+        $pm = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p, 2=3p
+        $phEff = (int)$this->ReadAttributeInteger('WB_ActivePhases');
+        if ($phEff < 1 || $phEff > 3) { $phEff = ($pm===2) ? 3 : 1; }
+        $U = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
         $minA = (int)$this->ReadPropertyInteger('MinAmp');
         $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
-        $vidA = @$this->GetIDForIdent('Ampere_A');
-        $curA = $vidA ? (int)@GetValue($vidA) : (int)$this->ReadAttributeInteger('LastAmpSet');
-        if ($curA <= 0) $curA = $minA;
 
-        if ($targetA === $curA) return;
+        // NRG frisch parsen (falls im Buffer)
+        $nrgBuf = $this->mqttBufGet('nrg', null);
+        if ($nrgBuf !== null && method_exists($this, 'parseAndStoreNRG')) {
+            try { $this->parseAndStoreNRG($nrgBuf); } catch (\Throwable $e) {}
+        }
 
-        $nextA = ($targetA > $curA) ? $curA + 1 : $curA - 1;
-        $nextA = max($minA, min($maxA, $nextA));
+        // Laden aktiv?
+        $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));      // 2 = Start
+        $car = (int)@GetValue(@$this->GetIDForIdent('CarState')); // 2 = lädt
+        $charging = ($frc === 2) && ($car === 2);
 
-        $this->sendSet('amp', (string)$nextA);
-        if ($vidA) @SetValue($vidA, $nextA);
-        $this->WriteAttributeInteger('LastAmpSet',    $nextA);
-        $this->WriteAttributeInteger('LastPublishMs', $nowMs);
-        $this->dbgLog('RAMP_SLOW', sprintf('A %d → %d (Ziel=%d, Überschuss=%dW)', $curA, $nextA, $targetA, $surplus));
+        // WB-Leistung = NRG[11] wenn geladen, sonst 0
+        $wbW = 0;
+        if ($charging) {
+            $nrg = $this->mqttBufGet('nrg', null);
+            if (is_string($nrg)) { $tmp = @json_decode($nrg, true); if (is_array($tmp)) $nrg = $tmp; }
+            if (is_array($nrg) && array_key_exists(11, $nrg) && is_numeric($nrg[11])) {
+                $wbW = (int)round(max(0.0, (float)$nrg[11]));
+            }
+            // Fallback nur wenn NRG fehlt
+            if ($wbW <= 0) {
+                $ampLive = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
+                $wbW = (int)round($ampLive * $U * max(1, $phEff));
+            }
+        }
+        $this->SetValueSafe('Leistung_W', $wbW);
+
+        // Zielwerte
+        $targetW = $surplus;
+        $targetA = (int)ceil($targetW / ($U * max(1,$phEff)));
+        $targetA = max($minA, min($maxA, $targetA));
+        $this->SetValueSafe('TargetW_Live', $targetW);
+        $this->SetValueSafe('TargetA_Live', $targetA);
+        $this->WriteAttributeInteger('Slow_LastCalcA', $targetA);
+
+        // Start/Stop-Sekundenzähler (für schnellen FRC)
+        $this->WriteAttributeInteger('Slow_SurplusRaw', $surplusRaw);
+        $startW = (int)$this->ReadPropertyInteger('StartThresholdW');
+        $stopW  = (int)$this->ReadPropertyInteger('StopThresholdW');
+        $above  = (int)$this->ReadAttributeInteger('Slow_AboveStartMs');
+        $below  = (int)$this->ReadAttributeInteger('Slow_BelowStopMs');
+        $above  = ($surplusRaw >= $startW) ? min($above + 1000, 3600000) : 0;
+        $below  = ($surplusRaw <= $stopW)  ? min($below + 1000, 3600000) : 0;
+        $this->WriteAttributeInteger('Slow_AboveStartMs', $above);
+        $this->WriteAttributeInteger('Slow_BelowStopMs',  $below);
     }
 
     // -------------------------
@@ -374,21 +368,27 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     {
         $houseTotal = $this->readVarWUnit('VarHouse_ID','VarHouse_Unit');
 
-        // Ladezustand/FRC prüfen
+        // Ladezustand
         $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));          // 1=Stop, 2=Start
-        $car = (int)@GetValue(@$this->GetIDForIdent('CarState'));     // go-e CarState
+        $car = (int)@GetValue(@$this->GetIDForIdent('CarState'));     // 2 = lädt
         $charging = method_exists($this, 'isChargingActive')
             ? (bool)$this->isChargingActive()
-            : in_array($car, [2,3,4], true); // 2..4 = lädt/verbunden aktiv
+            : ($frc === 2 && $car === 2);
 
-        // WB-Leistung bevorzugt aus Live-Variable, sonst Trait
-        $wbLiveId = @$this->GetIDForIdent('Leistung_W');
-        $wbRaw    = $wbLiveId ? (float)@GetValue($wbLiveId) : (float)$this->getWBPowerW();
-        $wbRaw    = max(0.0, $wbRaw);
-
-        // Falls nicht Laden aktiv ODER FRC!=Start → WB=0 und Filter zurücksetzen
-        if (!$charging || $frc !== 2) {
-            $wbRaw = 0.0;
+        // WB-Leistung: bevorzugt NRG[11]
+        $wbRaw = 0.0;
+        if ($charging && $frc === 2) {
+            $nrg = $this->mqttBufGet('nrg', null);
+            if (is_string($nrg)) { $t = @json_decode($nrg, true); if (is_array($t)) $nrg = $t; }
+            if (is_array($nrg) && array_key_exists(11, $nrg) && is_numeric($nrg[11])) {
+                $wbRaw = (float)$nrg[11];
+            } else {
+                // Fallback Trait
+                $wbRaw = (float)$this->getWBPowerW();
+            }
+            if ($wbRaw < 0) $wbRaw = 0.0;
+        } else {
+            // nicht laden → Filter zurücksetzen
             $this->WriteAttributeInteger('WB_W_Smooth', 0);
             $this->WriteAttributeInteger('WB_SubtractActive', 0);
         }
@@ -398,14 +398,14 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $batt = $this->readVarWUnit('VarBattery_ID','VarBattery_Unit');
         if (!$this->ReadPropertyBoolean('BatteryPositiveIsCharge')) { $batt = -$batt; }
 
-        // --- WB Glättung (EMA) ---
+        // EMA-Glättung
         $alphaWB = 0.4;
         $wbPrev  = (int)$this->ReadAttributeInteger('WB_W_Smooth');
         if ($wbPrev <= 0) { $wbPrev = (int)round($wbRaw); }
         $wbSmooth = (int)round($alphaWB * $wbRaw + (1.0 - $alphaWB) * $wbPrev);
         $this->WriteAttributeInteger('WB_W_Smooth', $wbSmooth);
 
-        // --- Hysterese für "WB abziehen?" ---
+        // Hysterese „WB abziehen?“
         $onW = $minWB;
         $offW = (int)max(0, $minWB - 120);
         $active = (int)$this->ReadAttributeInteger('WB_SubtractActive') === 1;
@@ -418,15 +418,13 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         } else {
             if ($wbSmooth >= $onW  && ($nowMs - $lastChg) >= $holdMs) { $active = true;  $this->WriteAttributeInteger('WB_SubtractChangedMs', $nowMs); }
         }
+        if (!$charging || $frc !== 2) { $active = false; }
         $this->WriteAttributeInteger('WB_SubtractActive', $active ? 1 : 0);
 
         $wbEff    = $active ? $wbSmooth : 0;
-
-        // Haus ohne WB und ohne Batterie-Laden
         $houseNet = max(0, (int)round($houseTotal - $wbEff - max(0, $batt)));
         $this->SetValueSafe('HouseNet_W', $houseNet);
 
-        // (Optional) Kompat-Var
         if ($vid = @$this->GetIDForIdent('Hausverbrauch_abz_Wallbox')) { @SetValue($vid, $houseNet); }
 
         if ($withLog) {

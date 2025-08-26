@@ -259,4 +259,18 @@ trait Helpers
         $this->dbgLog('setCurrentLimitA', "amp={$amp} A gesendet");
     }
 
+    private function preferNrgPowerW(): int
+    {
+        // versuche NRG[11]
+        $nrg = $this->mqttBufGet('nrg', null);
+        if ($nrg !== null) {
+            if (is_string($nrg)) { $tmp = json_decode($nrg, true); if (is_array($tmp)) $nrg = $tmp; }
+            if (is_array($nrg) && isset($nrg[11])) {
+                return (int)round(max(0.0, (float)$nrg[11]));
+            }
+        }
+        // Fallback: Trait
+        return (int)round(max(0.0, (float)$this->getWBPowerW()));
+    }
+
 }
