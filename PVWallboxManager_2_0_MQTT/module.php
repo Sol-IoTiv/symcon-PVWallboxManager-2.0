@@ -172,6 +172,10 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RecalcHausverbrauchAbzWallbox(true);
         $this->Loop();
 
+        $pid = (int)$this->ReadPropertyInteger('MQTTServerID');
+        if ($pid > 0 && @IPS_InstanceExists($pid)) @IPS_SetParent($this->InstanceID, $pid);
+        $this->mqttSubscribeAll();
+
         $this->SetStatus(IS_ACTIVE);
     }
 
@@ -225,6 +229,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     public function Loop(): void
     {
         // --- Lademodus prüfen ---
+        $this->SetTimerInterval('LOOP', 0); // ganz oben
         $mode  = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV, 1=Manuell, 2=Aus
         $nowMs = (int)(microtime(true) * 1000);
         $lastFR = $this->lastFrcChangeMs();
@@ -232,7 +237,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         // MQTT-Buffer lesen
         $nrg = $this->mqttBufGet('nrg', null);
         if ($nrg !== null) {
-            $this->parseAndStoreNRG($nrg); // setzt Leistung_W intern wie gehabt
+            try { $this->parseAndStoreNRG($nrg); } catch (\Throwable $e) { $this->dbgLog('NRG', 'Parse-Fehler: '.$e->getMessage()); }
         }
 
         // AUS: Force-Off erzwingen und raus
@@ -243,6 +248,10 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
                 $this->dbgLog('Lademodus', 'Aus → Force-Off');
             }
+            $this->WriteAttributeInteger('CntStart', 0);
+            $this->WriteAttributeInteger('CntStop',  0);
+            $this->WriteAttributeInteger('CntTo1p',  0);
+            $this->WriteAttributeInteger('CntTo3p',  0);
             return;
         }
     
@@ -256,11 +265,12 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             [$minA, $maxA] = $this->ampRange();
             $aWanted = max($minA, min($maxA, (int)@GetValue(@$this->GetIDForIdent('Ampere_A'))));
 
-            if ($holdOver) {
+            $curPm = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus'));
+            if ($holdOver && $pmWanted !== $curPm) {
                 $this->sendSet('psm', (string)$pmWanted);
                 $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
                 $this->WriteAttributeInteger('LastPhaseMode', $pmWanted);
-            } else {
+            } elseif (!$holdOver) {
                 $this->dbgLog('Lademodus', 'Phasenwechsel-Sperrzeit aktiv – psm bleibt vorerst');
             }
 
@@ -383,7 +393,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $onHold  = ($nowMs - $lastFR) < (int)$this->ReadPropertyInteger('MinOnTimeMs');
         $offHold = ($nowMs - $lastFR) < (int)$this->ReadPropertyInteger('MinOffTimeMs');
 
-//        $connected = ($car >= 3);
         $connected = in_array($car, [1,2,3,4], true);
         $charging  = $this->isChargingActive();
 
@@ -398,7 +407,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         ));
 
         // 3ph → 1ph für Start, falls 3ph nicht reicht, 1ph jedoch schon (und Sperrzeit vorbei)
-        if (!$charging && $pm === 2 && $holdOver && $surplus < $minP3 && $surplus >= $minP1) {
+        if ($connected && !$charging && $pm === 2 && $holdOver && $surplus < $minP3 && $surplus >= $minP1) {
             $this->sendSet('psm', '1');
             $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
             $this->WriteAttributeInteger('LastPhaseMode', 1);
@@ -407,6 +416,21 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         }
 
         $frcCur = (int)@GetValue(@$this->GetIDForIdent('FRC'));
+        if (!$connected) {
+            if ($frcCur !== 1) {
+                $this->sendSet('frc', '1');
+                $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
+                $this->dbgLog('Ladung', 'Stop (kein Fahrzeug)');
+            }
+            // Zähler zurücksetzen
+            $this->WriteAttributeInteger('CntStart', 0);
+            $this->WriteAttributeInteger('CntStop',  0);
+            $this->WriteAttributeInteger('CntTo1p',  0);
+            $this->WriteAttributeInteger('CntTo3p',  0);
+            return;
+        }
+
+        $startedNow = false;
 
         // STOP
         if ($charging && $stopOk && !$onHold) {
@@ -427,28 +451,31 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             $this->WriteAttributeInteger('CntStart', 0);
             $this->WriteAttributeInteger('CntStop',  0);
             $this->dbgLog('Ladung', 'Start (Hysterese & Reserve erfüllt, pm=' . ($ph===3?'3-ph':'1-ph') . ')');
+            $startedNow = true;
             // kein return: gleich sanft Ampere nachziehen
         }
 
         // --- Sanftes Ampere-Update: 1A-Schritte, mind. 3–5s Abstand ---
-        $lastPub   = (int)$this->ReadAttributeInteger('LastPublishMs');
-        $gapMs     = (int)$this->ReadPropertyInteger('MinPublishGapMs'); // z.B. 2000
-        $lastA     = (int)$this->ReadAttributeInteger('LastAmpSet');
-        $vidA      = @$this->GetIDForIdent('Ampere_A');
-        $curA      = $vidA ? (int)@GetValue($vidA) : $lastA;
+        // Status für Publish-Rate
+        $lastPub = (int)$this->ReadAttributeInteger('LastPublishMs');
+        $gapMs   = (int)$this->ReadPropertyInteger('MinPublishGapMs'); // z.B. 2000
+        $lastA   = (int)$this->ReadAttributeInteger('LastAmpSet');
+        $vidA    = @$this->GetIDForIdent('Ampere_A');
+        $curA    = $vidA ? (int)@GetValue($vidA) : $lastA;
 
-        // Zielampere (wie bisher) – auf Basis des ROH-Überschusses
+        // Zielampere (auf Basis des GLATTEN Überschusses)
         $effSurplus = max(0, $surplus - (int)floor($resW / 2));
         $neededA    = (int)floor($effSurplus / ($U * $ph));
         $setA       = max($minA, min($maxA, $neededA));
 
-        // Kleinständerung erst ab 2A Differenz (+ Rate-Limit via Publish-Gap *1.5)
-        $minDeltaA  = 2;
-        $minHoldMs  = (int)max(3000, floor($gapMs * 1.5));
-        $sincePub   = $nowMs - $lastPub;
+        // Dynamik fein einstellen
+        $minDeltaA = ($maxA - $minA) <= 6 ? 1 : 2;
+        $minHoldMs = (int)max(3000, floor($gapMs * 1.5));
+        $sincePub  = $nowMs - $lastPub;
 
-        if ($frcCur === 2 && $sincePub >= $minHoldMs && abs($setA - $curA) >= $minDeltaA) {
-            // Nur 1A pro Schritt – verhindert Sprünge
+        // Rampen nur wenn Force-On aktiv ODER gerade gestartet
+        if ( ($frcCur === 2 || $startedNow) && $sincePub >= $minHoldMs && abs($setA - $curA) >= $minDeltaA ) {
+            // 1A pro Schritt
             $nextA = ($setA > $curA) ? ($curA + 1) : ($curA - 1);
             $nextA = max($minA, min($maxA, $nextA));
 
@@ -545,156 +572,57 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
     public function GetConfigurationForm()
     {
-        // Prefix sauber ermitteln (Fallback: PVWM)
-        $inst   = @IPS_GetInstance($this->InstanceID);
-        $mod    = (is_array($inst) && isset($inst['ModuleID'])) ? @IPS_GetModule($inst['ModuleID']) : null;
-        $prefix = (is_array($mod) && !empty($mod['Prefix'])) ? $mod['Prefix'] : 'PVWM';
+        $U    = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
+        $minA = (int)$this->ReadPropertyInteger('MinAmpere');
+        $maxA = (int)$this->ReadPropertyInteger('MaxAmpere');
+        $thr3 = 3 * $minA * $U;
+        $thr1 = $maxA * $U;
 
-        $prop  = trim($this->ReadPropertyString('BaseTopic'));
-        $auto  = trim($this->ReadAttributeString('AutoBaseTopic'));
-        $state = ($prop !== '') ? 'Fix (Property)' : (($auto !== '') ? 'Auto erkannt' : 'Unbekannt');
+        $msHint = "⏱ 1 000 ms = 1 s · 10 000 ms = 10 s · 30 000 ms = 30 s";
 
-        $form = [
+        return json_encode([
             'elements' => [
-
-                // MQTT
                 [
-                    'type'    => 'ExpansionPanel',
-                    'caption' => 'MQTT / Geräte-Zuordnung',
-                    'items'   => [
-                        ['type' => 'Label', 'caption' => 'BaseTopic (leer = automatische Erkennung)'],
-                        ['type' => 'ValidationTextBox', 'name' => 'BaseTopic', 'caption' => 'MQTT BaseTopic (optional)'],
-                        ['type' => 'Label', 'caption' => 'Erkannt: ' . ($auto !== '' ? $auto : '—')],
-                        ['type' => 'Label', 'caption' => 'Status: ' . $state],
-                        [
-                            'type'  => 'RowLayout',
-                            'items' => [
-                                [
-                                    'type'    => 'Button',
-                                    'caption' => 'Erkannten BaseTopic übernehmen',
-                                    'onClick' => sprintf('%s_ApplyDetectedBaseTopic($id);', $prefix),
-                                    'enabled' => ($auto !== '' && $prop === '')
-                                ],
-                                [
-                                    'type'    => 'Button',
-                                    'caption' => 'Auto-Erkennung zurücksetzen',
-                                    'onClick' => sprintf('%s_ClearDetectedBaseTopic($id);', $prefix),
-                                    'enabled' => ($auto !== '')
-                                ]
-                            ]
-                        ],
-                        ['type' => 'ValidationTextBox', 'name' => 'DeviceIDFilter', 'caption' => 'DeviceID-Filter (optional)']
+                    'type'=>'ExpansionPanel','caption'=>'🔌 Wallbox','items'=>[
+                        ['type'=>'SelectInstance','name'=>'MQTTServerID','caption'=>'MQTT-Gateway'],
+                        ['type'=>'ValidationTextBox','name'=>'MQTTBaseTopic','caption'=>'Base-Topic (z. B. go-eCharger/285450)'],
+                        ['type'=>'RowLayout','items'=>[
+                            ['type'=>'SpinBox','name'=>'MinAmpere','caption'=>'Min. Ampere','minimum'=>6,'maximum'=>32,'suffix'=>' A'],
+                            ['type'=>'SpinBox','name'=>'MaxAmpere','caption'=>'Max. Ampere','minimum'=>6,'maximum'=>32,'suffix'=>' A'],
+                            ['type'=>'NumberSpinner','name'=>'NominalVolt','caption'=>'Netzspannung','minimum'=>200,'maximum'=>245,'suffix'=>' V'],
+                        ]],
+                        ['type'=>'ComboBox','name'=>'PhaseMode','caption'=>'Phasenmodus','options'=>[
+                            ['caption'=>'Auto','value'=>'auto'],
+                            ['caption'=>'1-phasig','value'=>'1p'],
+                            ['caption'=>'3-phasig','value'=>'3p'],
+                        ]],
+                        ['type'=>'NumberSpinner','name'=>'MinHoldAfterPhaseMs','caption'=>'Sperrzeit Phasenwechsel','suffix'=>' ms'],
+                        ['type'=>'Label','caption'=>"⚙️ Auto: 3-ph ab ≈ {$thr3} W · 1-ph unter ≈ {$thr1} W"],
                     ]
                 ],
-
-                // Energiequellen
                 [
-                    'type'    => 'ExpansionPanel',
-                    'caption' => 'Energiequellen',
-                    'items'   => [
-                        ['type' => 'Label', 'caption' => 'Pflicht: PV-Erzeugung & Hausverbrauch. Batterie optional.'],
-                        [
-                            'type'  => 'RowLayout',
-                            'items' => [
-                                ['type' => 'SelectVariable', 'name' => 'VarPV_ID', 'caption' => 'PV-Erzeugung'],
-                                [
-                                    'type'    => 'Select',
-                                    'name'    => 'VarPV_Unit',
-                                    'caption' => 'Einheit',
-                                    'options' => [
-                                        ['caption' => 'Watt (W)', 'value' => 'W'],
-                                        ['caption' => 'Kilowatt (kW)', 'value' => 'kW']
-                                    ]
-                                ]
-                            ]
-                        ],
-                        [
-                            'type'  => 'RowLayout',
-                            'items' => [
-                                ['type' => 'SelectVariable', 'name' => 'VarHouse_ID', 'caption' => 'Gesamter Hausverbrauch'],
-                                [
-                                    'type'    => 'Select',
-                                    'name'    => 'VarHouse_Unit',
-                                    'caption' => 'Einheit',
-                                    'options' => [
-                                        ['caption' => 'Watt (W)', 'value' => 'W'],
-                                        ['caption' => 'Kilowatt (kW)', 'value' => 'kW']
-                                    ]
-                                ]
-                            ]
-                        ],
-                        [
-                            'type'  => 'RowLayout',
-                            'items' => [
-                                ['type' => 'SelectVariable', 'name' => 'VarBattery_ID', 'caption' => 'Batterieleistung (+=Laden)'],
-                                [
-                                    'type'    => 'Select',
-                                    'name'    => 'VarBattery_Unit',
-                                    'caption' => 'Einheit',
-                                    'options' => [
-                                        ['caption' => 'Watt (W)', 'value' => 'W'],
-                                        ['caption' => 'Kilowatt (kW)', 'value' => 'kW']
-                                    ]
-                                ],
-                                ['type' => 'CheckBox', 'name' => 'BatteryPositiveIsCharge', 'caption' => 'Positiv = Laden (invertieren, falls nötig)']
-                            ]
-                        ]
+                    'type'=>'ExpansionPanel','caption'=>'🧠 Intelligente Logik','items'=>[
+                        ['type'=>'NumberSpinner','name'=>'StartThresholdW','caption'=>'Start bei PV-Überschuss','suffix'=>' W','hint'=>'Ab diesem Überschuss wird freigegeben.'],
+                        ['type'=>'NumberSpinner','name'=>'StopThresholdW','caption'=>'Stop bei Defizit','suffix'=>' W','hint'=>'Unter diesem Wert wird gestoppt.'],
+                        ['type'=>'RowLayout','items'=>[
+                            ['type'=>'SpinBox','name'=>'StartCycles','caption'=>'Start-Zyklen','minimum'=>1,'maximum'=>20],
+                            ['type'=>'SpinBox','name'=>'StopCycles','caption'=>'Stop-Zyklen','minimum'=>1,'maximum'=>20],
+                        ]],
                     ]
                 ],
-
-                // Regelung
                 [
-                    'type'    => 'ExpansionPanel',
-                    'caption' => 'Regelung',
-                    'items'   => [
-                        ['type' => 'NumberSpinner', 'name' => 'StartThresholdW', 'caption' => 'Start bei PV-Überschuss (W)'],
-                        ['type' => 'NumberSpinner', 'name' => 'StartCycles',     'caption' => 'Start-Hysterese (Zyklen)'],
-                        ['type' => 'NumberSpinner', 'name' => 'StopThresholdW',  'caption' => 'Stop bei fehlendem PV-Überschuss (W)'],
-                        ['type' => 'NumberSpinner', 'name' => 'StopCycles',      'caption' => 'Stop-Hysterese (Zyklen)'],
-
-                        ['type' => 'NumberSpinner', 'name' => 'ThresTo1p_W', 'caption' => 'Schwelle auf 1-phasig (W)'],
-                        ['type' => 'NumberSpinner', 'name' => 'To1pCycles',  'caption' => 'Zählerlimit 1-phasig'],
-                        ['type' => 'NumberSpinner', 'name' => 'ThresTo3p_W', 'caption' => 'Schwelle auf 3-phasig (W)'],
-                        ['type' => 'NumberSpinner', 'name' => 'To3pCycles',  'caption' => 'Zählerlimit 3-phasig'],
-
-                        ['type' => 'NumberSpinner', 'name' => 'MinAmp',      'caption' => 'Min. Ampere'],
-                        ['type' => 'NumberSpinner', 'name' => 'MaxAmp',      'caption' => 'Max. Ampere'],
-                        ['type' => 'NumberSpinner', 'name' => 'NominalVolt', 'caption' => 'Nennspannung pro Phase (V)'],
-
-                        ['type' => 'NumberSpinner', 'name' => 'MinHoldAfterPhaseMs', 'caption' => 'Sperrzeit nach Phasenwechsel (ms)'],
-                        ['type' => 'NumberSpinner', 'name' => 'MinPublishGapMs',     'caption' => 'Mindestabstand ama/set (ms)'],
-                        ['type' => 'NumberSpinner', 'name' => 'WBSubtractMinW',      'caption' => 'WB abziehen erst ab (W)'],
-                        ['type' => 'NumberSpinner', 'name' => 'StartReserveW',       'caption' => 'Start-Reserve (W)'],
-                        ['type' => 'NumberSpinner', 'name' => 'MinOnTimeMs',         'caption' => 'Min. EIN-Zeit FRC (ms)'],
-                        ['type' => 'NumberSpinner', 'name' => 'MinOffTimeMs',        'caption' => 'Min. AUS-Zeit FRC (ms)']
+                    'type'=>'ExpansionPanel','caption'=>'🔧 Erweitert','items'=>[
+                        ['type'=>'NumberSpinner','name'=>'MinPublishGapMs','caption'=>'Mindestabstand Befehle','suffix'=>' ms'],
+                        ['type'=>'NumberSpinner','name'=>'MinOnTimeMs','caption'=>'Min. EIN-Zeit FRC','suffix'=>' ms'],
+                        ['type'=>'NumberSpinner','name'=>'MinOffTimeMs','caption'=>'Min. AUS-Zeit FRC','suffix'=>' ms'],
+                        ['type'=>'Label','caption'=>$msHint],
                     ]
                 ],
-
-                // Debug
-                [
-                    'type'    => 'ExpansionPanel',
-                    'caption' => 'Debug & Diagnose',
-                    'items'   => [
-                        ['type' => 'CheckBox', 'name' => 'DebugPVWM', 'caption' => 'PVWM-Logs aktivieren (Instanz-Debug & Meldungen)'],
-                        ['type' => 'CheckBox', 'name' => 'DebugMQTT', 'caption' => 'MQTT-Daten protokollieren (Topic = Payload)'],
-                        // optional: Alt-Flag sichtbar lassen
-                        //['type' => 'CheckBox', 'name' => 'DebugLogging', 'caption' => 'Debug-Logging aktivieren (Instanz-Debug & Meldungen)'] // alt
-                    ]
-                ],
+            ],
+            'actions'=>[
+                ['type'=>'Label','caption'=>'📊 Hinweise werden mit aktuellen Werten nach Speichern angezeigt.']
             ]
-        ];
-
-        $json = json_encode($form, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
-        if ($json === false || $json === null) {
-            // Fallback, falls es doch hakt
-            $fallback = [
-                'elements' => [
-                    ['type' => 'Label', 'caption' => 'Form konnte nicht erzeugt werden (json_encode Fehler).']
-                ]
-            ];
-            return json_encode($fallback);
-        }
-        return $json;
+        ], JSON_UNESCAPED_UNICODE);
     }
 
 }

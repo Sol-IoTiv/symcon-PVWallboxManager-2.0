@@ -63,6 +63,15 @@ trait MqttClientTrait
         $this->SendDataToParent(json_encode($frame));
     }
 
+    private function mqttSubscribeAll(): void
+    {
+        $base = rtrim($this->currentBaseTopic(), '/');
+        if ($base === '') return;
+        foreach (['nrg','car','alw','amp','psm','utc','eto'] as $t) {
+            $this->mqttSubscribe($base.'/'.$t, 0);
+        }
+    }
+
     protected function mqttPublish(string $topic, string $payload, int $qos = 0, bool $retain = false): void
     {
         $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
@@ -79,9 +88,13 @@ trait MqttClientTrait
         ]));
     }
 
-    protected function sendSet(string $key, string $value, int $qos = 0, bool $retain = false): void
+    private function sendSet(string $key, string $payload): void
     {
-        $this->mqttPublish($this->bt($key) . '/set', $value, $qos, $retain);
+        $base = $this->currentBaseTopic();
+        if ($base === '') return;
+        $topic = $base . '/' . $key . '/set';   // amp/set, frc/set, psm/set
+        $this->mqttPublish($topic, $payload, 0, false);
+        $this->dbgMqtt('TX', $topic.' = '.$payload);
     }
 
     protected function autoAttachSingleMqttGateway(): int
