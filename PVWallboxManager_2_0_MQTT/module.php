@@ -243,6 +243,15 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $minA = (int)$this->ReadPropertyInteger('MinAmp');
         $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
 
+        // WB-Leistung live setzen (MQTT -> Fallback aus A*U*ph)
+        $wbW = (int)round(max(0.0, (float)$this->getWBPowerW()));
+        if ($wbW <= 0) {
+            $ampLive = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
+            $wbW = (int)round($ampLive * $U * max(1, $phEff));
+        }
+        $this->SetValueSafe('Leistung_W', $wbW);
+
+        // Zielwerte
         $targetW = $surplus;
         $targetA = (int)ceil($targetW / ($U * max(1,$phEff)));
         $targetA = max($minA, min($maxA, $targetA));
