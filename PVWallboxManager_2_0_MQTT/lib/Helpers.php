@@ -273,4 +273,18 @@ trait Helpers
         return (int)round(max(0.0, (float)$this->getWBPowerW()));
     }
 
+    private function targetPhaseAmp(int $targetW): array
+    {
+        $pm = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1|2
+        if ($this->ReadPropertyBoolean('AutoPhase')) {
+            $pm = ($targetW >= (int)$this->ReadPropertyInteger('ThresTo3p_W')) ? 2 : 1;
+        }
+        $u   = (int)$this->ReadPropertyInteger('NominalVolt'); if ($u <= 0) $u = 230;
+        $den = $u * ($pm === 2 ? 3 : 1);
+        $a   = ($den > 0) ? (int)round($targetW / $den) : 0;
+        $a   = max($this->minAmp(), min($this->maxAmp(), $a));
+        $txt = ($pm === 2 ? '3-phasig' : '1-phasig') . ' / ' . $a . ' A';
+        return [$pm, $a, $txt];
+}
+
 }

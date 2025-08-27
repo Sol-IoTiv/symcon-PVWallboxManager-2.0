@@ -97,7 +97,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterVariableInteger('TargetA_Live', 'Ziel Ampere (live)', 'GoE.Amp', 12);
         $this->RegisterVariableInteger('TargetW_Live', 'Zielleistung (live)', '~Watt', 13);
         $this->RegisterPropertyInteger('TargetMinW', 1380);  // Zielleistung erst ab diesem Wert anzeigen
-
+        $this->RegisterVariableString('TargetPhaseAmp', 'Ziel (Phasen/A)', '~TextBox', 125);
 
         // --- Attribute ---
         $this->RegisterAttributeInteger('LastFrcChangeMs', 0);
@@ -294,10 +294,13 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $surplus = (int)round($alpha*$surplusRaw + (1.0-$alpha)*$prevEMA);
         $this->WriteAttributeInteger('SmoothSurplusW', $surplus);
 
-        // Zielwerte aus geglättetem Überschuss
+        // Zielwerte aus geglättetem Überschuss eventuell entferen ???
         $targetW = $surplus;
         $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW') ?: 300;
         if ($targetW < $minTargetW) { $targetW = 0; }
+
+        [$pm,$a,$txt] = $this->targetPhaseAmp((int)$targetW);
+        $this->SetValueSafe('TargetPhaseAmp', $txt);
 
         $denom  = $U * max(1,$phEff);
         $targetA = ($targetW > 0 && $denom > 0) ? (int)ceil($targetW / $denom) : 0;
@@ -350,6 +353,11 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     {
         if (!(bool)@GetValue(@$this->GetIDForIdent('SlowControlActive'))) return;
         if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 2) return;
+
+        [$pm,$a] = $this->targetPhaseAmp((int)$targetW);
+        $this->sendSet('psm', (string)$pm);
+        $this->setCurrentLimitA($a);
+        $this->sendSet('frc', '2');
 
         $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));          // nur bei Freigabe
         if ($frc !== 2) return;
