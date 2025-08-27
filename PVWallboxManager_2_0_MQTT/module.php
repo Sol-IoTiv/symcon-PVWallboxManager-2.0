@@ -63,6 +63,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterPropertyInteger('StartReserveW', 200);
         $this->RegisterPropertyInteger('MinOnTimeMs',  60000);
         $this->RegisterPropertyInteger('MinOffTimeMs', 15000);
+        $this->RegisterPropertyInteger('RampStepA', 1);         // Schrittweite in A
 
         // --- Slow-Control (neu) ---
         $this->RegisterPropertyBoolean('SlowControlEnabled', true);
