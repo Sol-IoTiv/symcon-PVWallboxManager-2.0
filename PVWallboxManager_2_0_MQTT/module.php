@@ -232,39 +232,41 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     {
         $this->SetValueSafe('Uhrzeit', time());
 
+        // Eingänge
         $pv = (int)round((float)$this->readVarWUnit('VarPV_ID','VarPV_Unit'));
-        $houseNetVid = @$this->GetIDForIdent('HouseNet_W');
-        $houseNet = $houseNetVid ? (int)@GetValue($houseNetVid) : 0;
-        $surplusRaw = max(0, $pv - $houseNet);
 
-        $alpha = min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0));
-        $prev  = (int)$this->ReadAttributeInteger('SmoothSurplusW');
-        $surplus = (int)round($alpha*$surplusRaw + (1.0-$alpha)*$prev);
-        $this->WriteAttributeInteger('SmoothSurplusW', $surplus);
+        // Batterie: nur Laden als Verbrauch
+        $batt = (int)round((float)$this->readVarWUnit('VarBattery_ID','VarBattery_Unit'));
+        if (!$this->ReadPropertyBoolean('BatteryPositiveIsCharge')) { $batt = -$batt; }
+        $battCharge = max(0, $batt);
 
-        $pm = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p, 2=3p
-        $phEff = (int)$this->ReadAttributeInteger('WB_ActivePhases');
-        if ($phEff < 1 || $phEff > 3) { $phEff = ($pm===2) ? 3 : 1; }
-        $U = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
-        $minA = (int)$this->ReadPropertyInteger('MinAmp');
-        $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
+        // Haus gesamt (inkl. WB)
+        $houseTotal = (int)round((float)$this->readVarWUnit('VarHouse_ID','VarHouse_Unit'));
 
-        // NRG frisch parsen (falls vorhanden)
+        // NRG-Buffer frisch parsen (falls vorhanden)
         $nrgBuf = $this->mqttBufGet('nrg', null);
         if ($nrgBuf !== null && method_exists($this, 'parseAndStoreNRG')) {
             try { $this->parseAndStoreNRG($nrgBuf); } catch (\Throwable $e) {}
         }
+
+        // Status / Netz
+        $pm = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p, 2=3p
+        $phEff = (int)$this->ReadAttributeInteger('WB_ActivePhases');
+        if ($phEff < 1 || $phEff > 3) { $phEff = ($pm===2) ? 3 : 1; }
+        $U    = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
+        $minA = (int)$this->ReadPropertyInteger('MinAmp');
+        $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
 
         // Laden aktiv?
         $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));      // 2 = Start
         $car = (int)@GetValue(@$this->GetIDForIdent('CarState')); // 2 = lädt
         $charging = ($frc === 2) && ($car === 2);
 
-        // WB-Leistung = NRG[11] wenn geladen, sonst 0
+        // WB-Leistung: NRG[11] (nur wenn geladen), sonst 0; Fallback aus A*U*Phasen
         $wbW = 0;
         if ($charging) {
             $nrg = $this->mqttBufGet('nrg', null);
-            if (is_string($nrg)) { $tmp = @json_decode($nrg, true); if (is_array($tmp)) $nrg = $tmp; }
+            if (is_string($nrg)) { $t = @json_decode($nrg, true); if (is_array($t)) $nrg = $t; }
             if (is_array($nrg) && array_key_exists(11, $nrg) && is_numeric($nrg[11])) {
                 $wbW = (int)round(max(0.0, (float)$nrg[11]));
             }
@@ -275,20 +277,24 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         }
         $this->SetValueSafe('Leistung_W', $wbW);
 
-        // --- Patch A: Batterie-Laden abziehen ---
-        $batt = (int)round((float)$this->readVarWUnit('VarBattery_ID','VarBattery_Unit'));
-        if (!$this->ReadPropertyBoolean('BatteryPositiveIsCharge')) { $batt = -$batt; }
-        $battCharge = max(0, $batt);
+        // --- Überschuss für Wallbox: PV − Batt(Laden) − Haus + WB ---
+        $surplusRaw = max(0, $pv - $battCharge - $houseTotal + $wbW);
 
-        // Zielwerte (Surplus = PV − HouseNet; Batt bereits in HouseNet enthalten)
-        $targetW = max(0, $surplus);
+        // Glättung (EMA) für Anzeige/Ziel
+        $alpha   = min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0));
+        $prevEMA = (int)$this->ReadAttributeInteger('SmoothSurplusW');
+        $surplus = (int)round($alpha*$surplusRaw + (1.0-$alpha)*$prevEMA);
+        $this->WriteAttributeInteger('SmoothSurplusW', $surplus);
+
+        // Zielwerte aus geglättetem Überschuss
+        $targetW = $surplus;
         $targetA = (int)ceil($targetW / ($U * max(1,$phEff)));
         $targetA = max($minA, min($maxA, $targetA));
         $this->SetValueSafe('TargetW_Live', $targetW);
         $this->SetValueSafe('TargetA_Live', $targetA);
         $this->WriteAttributeInteger('Slow_LastCalcA', $targetA);
 
-        // Sekundenzähler für schnellen FRC
+        // Sekundenzähler für schnellen FRC (auf Basis der Roh-Formel)
         $this->WriteAttributeInteger('Slow_SurplusRaw', $surplusRaw);
         $startW = (int)$this->ReadPropertyInteger('StartThresholdW');
         $stopW  = (int)$this->ReadPropertyInteger('StopThresholdW');
