@@ -296,7 +296,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         // Zielwerte aus geglättetem Überschuss
         $targetW = $surplus;
-        $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW') ?: 1380;
+        $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW') ?: 300;
         if ($targetW < $minTargetW) { $targetW = 0; }
 
         $denom  = $U * max(1,$phEff);
