@@ -324,6 +324,26 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $p1   = ($surplusRaw <= $thr1) ? min($p1 + 1000, 3600000) : 0;
         $this->WriteAttributeInteger('Phase_Above3pMs', $p3);
         $this->WriteAttributeInteger('Phase_Below1pMs', $p1);
+
+        // ---- Log "PV-Überschuss" (übersichtlich, mit Einheiten) ----
+        $fmtW = static function ($w): string { return number_format((int)round($w), 0, ',', '.') . ' W'; };
+        $fmtA = static function ($a): string { return number_format((int)round($a), 0, ',', '.') . ' A'; };
+        $phTxt = (max(1, $phEff) === 3) ? '3p' : '1p';
+
+        $this->dbgLog('PV-Überschuss', sprintf(
+            'PV=%s − Batt(Laden)=%s − Haus=%s + WB=%s ⇒ Roh=%s | EMA=%s (α=%.2f) | Ziel=%s, ZielA=%s @ %d V · %s',
+            $fmtW($pv),
+            $fmtW($battCharge),
+            $fmtW($houseTotal),
+            $fmtW($wbW),
+            $fmtW($surplusRaw),
+            $fmtW($surplus),
+            min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0)),
+            $fmtW($targetW),
+            $fmtA($targetA),
+            (int)$U,
+            $phTxt
+        ));
     }
 
     public function SLOW_TickControl(): void
