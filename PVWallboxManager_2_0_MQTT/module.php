@@ -275,7 +275,13 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         }
         $this->SetValueSafe('Leistung_W', $wbW);
 
-        $targetW = $surplus;
+        // --- Patch A: Batterie-Laden abziehen ---
+        $batt = (int)round((float)$this->readVarWUnit('VarBattery_ID','VarBattery_Unit'));
+        if (!$this->ReadPropertyBoolean('BatteryPositiveIsCharge')) { $batt = -$batt; }
+        $battCharge = max(0, $batt);
+
+        // Zielwerte (PV - HouseNet - BatterieLaden)
+        $targetW = max(0, $surplus - $battCharge);
         $targetA = (int)ceil($targetW / ($U * max(1,$phEff)));
         $targetA = max($minA, min($maxA, $targetA));
         $this->SetValueSafe('TargetW_Live', $targetW);
