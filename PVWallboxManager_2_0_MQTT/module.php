@@ -389,87 +389,30 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     }
 
     // -------------------------
-    // Hilfsrechner: Hausverbrauch ohne WB (deine letzte Version, robust)
+    // Hilfsrechner: Hausverbrauch ohne WB
     // -------------------------
     public function RecalcHausverbrauchAbzWallbox(bool $withLog = true): void
     {
-        $houseTotal = $this->readVarWUnit('VarHouse_ID','VarHouse_Unit');
+        // Haus gesamt (positiv, inkl. WB)
+        $houseTotal = (int)round((float)$this->readVarWUnit('VarHouse_ID','VarHouse_Unit'));
 
-        // Ladezustand
-        $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));      // 1=Stop, 2=Start
-        $car = (int)@GetValue(@$this->GetIDForIdent('CarState')); // 2 = lädt
-        $charging = method_exists($this, 'isChargingActive')
-            ? (bool)$this->isChargingActive()
-            : ($frc === 2 && $car === 2);
+        // WB-Leistung aus eigener Variablen (positiv). Fallback: Trait.
+        $wbVid = @$this->GetIDForIdent('Leistung_W');
+        $wb    = $wbVid ? (int)@GetValue($wbVid) : (int)round(max(0.0, (float)$this->getWBPowerW()));
+        if ($wb < 0) $wb = 0;
 
-        // WB-Leistung: bevorzugt NRG[11]
-        $wbRaw = 0.0;
-        if ($charging && $frc === 2) {
-            $nrg = $this->mqttBufGet('nrg', null);
-            if (is_string($nrg)) { $t = @json_decode($nrg, true); if (is_array($t)) $nrg = $t; }
-            if (is_array($nrg) && array_key_exists(11, $nrg) && is_numeric($nrg[11])) {
-                $wbRaw = (float)$nrg[11];
-            } else {
-                $wbRaw = (float)$this->getWBPowerW();
-            }
-            if ($wbRaw < 0) $wbRaw = 0.0;
-        } else {
-            // nicht laden → Filter zurücksetzen
-            $this->WriteAttributeInteger('WB_W_Smooth', 0);
-            $this->WriteAttributeInteger('WB_SubtractActive', 0);
-        }
-
-        $minWB = max(0, (int)$this->ReadPropertyInteger('WBSubtractMinW'));
-
-        // Batterie: + = Laden zählt als Verbrauch, − = 0
-        $batt = $this->readVarWUnit('VarBattery_ID','VarBattery_Unit');
-        if (!$this->ReadPropertyBoolean('BatteryPositiveIsCharge')) { $batt = -$batt; }
-        $battCharge = max(0, (int)round($batt));
-
-        // EMA-Glättung
-        $alphaWB = 0.4;
-        $wbPrev  = (int)$this->ReadAttributeInteger('WB_W_Smooth');
-        if ($wbPrev <= 0) { $wbPrev = (int)round($wbRaw); }
-        $wbSmooth = (int)round($alphaWB * $wbRaw + (1.0 - $alphaWB) * $wbPrev);
-        $this->WriteAttributeInteger('WB_W_Smooth', $wbSmooth);
-
-        // Hysterese „WB abziehen?“
-        $onW = $minWB;
-        $offW = (int)max(0, $minWB - 120);
-        $active = (int)$this->ReadAttributeInteger('WB_SubtractActive') === 1;
-        $lastChg= (int)$this->ReadAttributeInteger('WB_SubtractChangedMs');
-        $nowMs  = (int)(microtime(true)*1000);
-        $holdMs = 4000;
-
-        if ($active) {
-            if ($wbSmooth <= $offW && ($nowMs - $lastChg) >= $holdMs) { $active = false; $this->WriteAttributeInteger('WB_SubtractChangedMs', $nowMs); }
-        } else {
-            if ($wbSmooth >= $onW  && ($nowMs - $lastChg) >= $holdMs) { $active = true;  $this->WriteAttributeInteger('WB_SubtractChangedMs', $nowMs); }
-        }
-        if (!$charging || $frc !== 2) { $active = false; }
-        $this->WriteAttributeInteger('WB_SubtractActive', $active ? 1 : 0);
-
-        $wbEff = $active ? $wbSmooth : 0;
-
-        // Haus ohne WB, Batterie-LADEN als Verbrauch ADDIEREN
-        $houseNet = max(0, (int)round($houseTotal - $wbEff + $battCharge));
+        // Haus ohne WB
+        $houseNet = max(0, $houseTotal - $wb);
         $this->SetValueSafe('HouseNet_W', $houseNet);
 
+        // Kompatibilität (falls vorhanden)
         if ($vid = @$this->GetIDForIdent('Hausverbrauch_abz_Wallbox')) { @SetValue($vid, $houseNet); }
 
         if ($withLog) {
             $fmt = static function (int $w): string { return number_format($w, 0, ',', '.'); };
             $this->dbgLog('HausNet', sprintf(
-                'HausGesamt=%s W | WB raw=%s W, smooth=%s W, eff=%s W [%s] (Schwelle on=%s/off=%s) | Batt(Laden)=%s W → HausNet=%s W',
-                $fmt((int)round((float)$houseTotal)),
-                $fmt((int)round((float)$wbRaw)),
-                $fmt((int)round((float)$wbSmooth)),
-                $fmt((int)round((float)$wbEff)),
-                $active ? 'aktiv' : 'inaktiv',
-                $fmt($onW),
-                $fmt($offW),
-                $fmt($battCharge),
-                $fmt($houseNet)
+                'HausGesamt=%s W | WB=%s W → HausNet=%s W',
+                $fmt($houseTotal), $fmt($wb), $fmt($houseNet)
             ));
         }
     }
