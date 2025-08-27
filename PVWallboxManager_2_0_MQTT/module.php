@@ -96,7 +96,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->EnableAction('SlowControlActive');
         $this->RegisterVariableInteger('TargetA_Live', 'Ziel Ampere (live)', 'GoE.Amp', 12);
         $this->RegisterVariableInteger('TargetW_Live', 'Zielleistung (live)', '~Watt', 13);
-        $this->RegisterPropertyInteger('TargetMinW', 300);  // Zielleistung erst ab diesem Wert anzeigen
+        $this->RegisterPropertyInteger('TargetMinW', 1380);  // Zielleistung erst ab diesem Wert anzeigen
 
 
         // --- Attribute ---
