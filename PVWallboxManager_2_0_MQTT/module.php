@@ -331,7 +331,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $phTxt = (max(1, $phEff) === 3) ? '3p' : '1p';
 
         $this->dbgLog('PV-Überschuss', sprintf(
-            'PV=%s − Batt(Laden)=%s − Haus=%s + WB=%s ⇒ Roh=%s | EMA=%s (α=%.2f) | Ziel=%s, ZielA=%s @ %d V · %s',
+            'PV=%s - Batt(Laden)=%s - Haus=%s + WB=%s ⇒ Roh=%s | EMA=%s (α=%.2f) | Ziel=%s, ZielA=%s @ %d V · %s',
             $fmtW($pv),
             $fmtW($battCharge),
             $fmtW($houseTotal),
