@@ -280,8 +280,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         if (!$this->ReadPropertyBoolean('BatteryPositiveIsCharge')) { $batt = -$batt; }
         $battCharge = max(0, $batt);
 
-        // Zielwerte (PV - HouseNet - BatterieLaden)
-        $targetW = max(0, $surplus - $battCharge);
+        // Zielwerte (Surplus = PV − HouseNet; Batt bereits in HouseNet enthalten)
+        $targetW = max(0, $surplus);
         $targetA = (int)ceil($targetW / ($U * max(1,$phEff)));
         $targetA = max($minA, min($maxA, $targetA));
         $this->SetValueSafe('TargetW_Live', $targetW);
@@ -390,8 +390,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $houseTotal = $this->readVarWUnit('VarHouse_ID','VarHouse_Unit');
 
         // Ladezustand
-        $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));          // 1=Stop, 2=Start
-        $car = (int)@GetValue(@$this->GetIDForIdent('CarState'));     // 2 = lädt
+        $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));      // 1=Stop, 2=Start
+        $car = (int)@GetValue(@$this->GetIDForIdent('CarState')); // 2 = lädt
         $charging = method_exists($this, 'isChargingActive')
             ? (bool)$this->isChargingActive()
             : ($frc === 2 && $car === 2);
@@ -404,7 +404,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             if (is_array($nrg) && array_key_exists(11, $nrg) && is_numeric($nrg[11])) {
                 $wbRaw = (float)$nrg[11];
             } else {
-                // Fallback Trait
                 $wbRaw = (float)$this->getWBPowerW();
             }
             if ($wbRaw < 0) $wbRaw = 0.0;
@@ -416,8 +415,10 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         $minWB = max(0, (int)$this->ReadPropertyInteger('WBSubtractMinW'));
 
+        // Batterie: + = Laden zählt als Verbrauch, − = 0
         $batt = $this->readVarWUnit('VarBattery_ID','VarBattery_Unit');
         if (!$this->ReadPropertyBoolean('BatteryPositiveIsCharge')) { $batt = -$batt; }
+        $battCharge = max(0, (int)round($batt));
 
         // EMA-Glättung
         $alphaWB = 0.4;
@@ -442,8 +443,10 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         if (!$charging || $frc !== 2) { $active = false; }
         $this->WriteAttributeInteger('WB_SubtractActive', $active ? 1 : 0);
 
-        $wbEff    = $active ? $wbSmooth : 0;
-        $houseNet = max(0, (int)round($houseTotal - $wbEff - max(0, $batt)));
+        $wbEff = $active ? $wbSmooth : 0;
+
+        // Haus ohne WB, Batterie-LADEN als Verbrauch ADDIEREN
+        $houseNet = max(0, (int)round($houseTotal - $wbEff + $battCharge));
         $this->SetValueSafe('HouseNet_W', $houseNet);
 
         if ($vid = @$this->GetIDForIdent('Hausverbrauch_abz_Wallbox')) { @SetValue($vid, $houseNet); }
@@ -451,7 +454,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         if ($withLog) {
             $fmt = static function (int $w): string { return number_format($w, 0, ',', '.'); };
             $this->dbgLog('HausNet', sprintf(
-                'HausGesamt=%s W | WB raw=%s W, smooth=%s W, eff=%s W [%s] (Schwelle on=%s/off=%s) → HausNet=%s W',
+                'HausGesamt=%s W | WB raw=%s W, smooth=%s W, eff=%s W [%s] (Schwelle on=%s/off=%s) | Batt(Laden)=%s W → HausNet=%s W',
                 $fmt((int)round((float)$houseTotal)),
                 $fmt((int)round((float)$wbRaw)),
                 $fmt((int)round((float)$wbSmooth)),
@@ -459,6 +462,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 $active ? 'aktiv' : 'inaktiv',
                 $fmt($onW),
                 $fmt($offW),
+                $fmt($battCharge),
                 $fmt($houseNet)
             ));
         }
