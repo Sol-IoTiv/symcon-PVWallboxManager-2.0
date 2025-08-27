@@ -50,6 +50,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterPropertyInteger('To1pCycles', 3);
         $this->RegisterPropertyInteger('ThresTo3p_W', 4140);
         $this->RegisterPropertyInteger('To3pCycles', 3);
+        $this->RegisterPropertyBoolean('SnapOnConnect', true);   // sofort auf Ziel-A
+        $this->RegisterPropertyBoolean('AutoPhase', true);       // 1p/3p automatisch
 
         // --- Netz-/Strom-Parameter & Zeiten ---
         $this->RegisterPropertyInteger('MinAmp', 6);
@@ -119,6 +121,10 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterAttributeInteger('Slow_SurplusRaw', 0);
         $this->RegisterAttributeInteger('Slow_AboveStartMs', 0);
         $this->RegisterAttributeInteger('Slow_BelowStopMs', 0);
+
+        $this->RegisterAttributeInteger('LastCarState', 0);
+        $this->RegisterAttributeInteger('Phase_Above3pMs', 0);
+        $this->RegisterAttributeInteger('Phase_Below1pMs', 0);
 
         // --- Timer ---
         $this->RegisterTimer('LOOP', 0, $this->modulePrefix().'_Loop($_IPS["TARGET"]);'); // bleibt vorhanden, aber in Slow aus
@@ -310,54 +316,104 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $below  = ($surplusRaw <= $stopW)  ? min($below + 1000, 3600000) : 0;
         $this->WriteAttributeInteger('Slow_AboveStartMs', $above);
         $this->WriteAttributeInteger('Slow_BelowStopMs',  $below);
+        $thr3 = (int)$this->ReadPropertyInteger('ThresTo3p_W');
+        $thr1 = (int)$this->ReadPropertyInteger('ThresTo1p_W');
+        $p3   = (int)$this->ReadAttributeInteger('Phase_Above3pMs');
+        $p1   = (int)$this->ReadAttributeInteger('Phase_Below1pMs');
+        $p3   = ($surplusRaw >= $thr3) ? min($p3 + 1000, 3600000) : 0;
+        $p1   = ($surplusRaw <= $thr1) ? min($p1 + 1000, 3600000) : 0;
+        $this->WriteAttributeInteger('Phase_Above3pMs', $p3);
+        $this->WriteAttributeInteger('Phase_Below1pMs', $p1);
     }
 
     public function SLOW_TickControl(): void
     {
-        // Slow-Regler aktiv und nicht "Aus"
         if (!(bool)@GetValue(@$this->GetIDForIdent('SlowControlActive'))) return;
         if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 2) return;
 
-        // Nur mit Ladefreigabe und verbundenem Auto
-        $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));          // 2 = Start/Freigabe
+        $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));          // nur bei Freigabe
         if ($frc !== 2) return;
-        $car = (int)@GetValue(@$this->GetIDForIdent('CarState'));      // 1..4 = verbunden/aktiv
-        if (!in_array($car, [1,2,3,4], true)) return;
+        $car = (int)@GetValue(@$this->GetIDForIdent('CarState'));
+        $connected = in_array($car, [1,2,3,4], true);
+        if (!$connected) { $this->WriteAttributeInteger('LastCarState', $car); return; }
 
-        // Mindestabstand zwischen Sends
         $nowMs   = (int)(microtime(true)*1000);
         $gapMs   = (int)$this->ReadPropertyInteger('MinPublishGapMs');
         $lastPub = (int)$this->ReadAttributeInteger('LastPublishMs');
-        if ($nowMs - $lastPub < $gapMs) return;
+        if ($nowMs - $lastPub < $gapMs) { $this->WriteAttributeInteger('LastCarState', $car); return; }
 
-        // Ziel-Leistung: erst ab Schwelle regeln
+        // --- Snap-to-Target beim Anstecken ---
+        $lastCar = (int)$this->ReadAttributeInteger('LastCarState');
         $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW') ?: 300;
         $vidTW = @$this->GetIDForIdent('TargetW_Live');
         $targetW = $vidTW ? (int)@GetValue($vidTW) : (int)$this->ReadAttributeInteger('SmoothSurplusW');
-        if ($targetW < $minTargetW) return;
-
-        // Ziel-Ampere aus 1-Hz-Tick
         $targetA = (int)$this->ReadAttributeInteger('Slow_LastCalcA');
-        if ($targetA <= 0) return;
 
-        // Ist-Ampere
+        if ($this->ReadPropertyBoolean('SnapOnConnect')
+            && !in_array($lastCar, [1,2,3,4], true) // vorher nicht verbunden
+            && $targetW >= $minTargetW && $targetA > 0) {
+            $minA = (int)$this->ReadPropertyInteger('MinAmp');
+            $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
+            $snapA = max($minA, min($maxA, $targetA));
+            $this->sendSet('amp', (string)$snapA);
+            if ($vidA = @$this->GetIDForIdent('Ampere_A')) { @SetValue($vidA, $snapA); }
+            $this->WriteAttributeInteger('LastAmpSet',    $snapA);
+            $this->WriteAttributeInteger('LastPublishMs', $nowMs);
+            $this->dbgLog('SNAP', 'Ampere → '.$snapA.' A');
+            $this->WriteAttributeInteger('LastCarState', $car);
+            return; // nächsten Tick weiterregeln
+        }
+
+        // --- Auto-Phasenumschaltung (1p/3p) ---
+        if ($this->ReadPropertyBoolean('AutoPhase')) {
+            $holdMs = (int)$this->ReadPropertyInteger('MinHoldAfterPhaseMs');
+            $lastSw = (int)$this->ReadAttributeInteger('LastPhaseSwitchMs');
+            if ($nowMs - $lastSw >= $holdMs) {
+                $pmCur = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')) ?: 1; // 1=1p, 2=3p
+                $p3 = (int)$this->ReadAttributeInteger('Phase_Above3pMs');
+                $p1 = (int)$this->ReadAttributeInteger('Phase_Below1pMs');
+                $need3 = max(1,(int)$this->ReadPropertyInteger('To3pCycles')) * 1000;
+                $need1 = max(1,(int)$this->ReadPropertyInteger('To1pCycles')) * 1000;
+
+                if ($pmCur === 1 && $p3 >= $need3) {
+                    $this->sendSet('psm', '2'); // 3-ph
+                    $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
+                    $this->dbgLog('PHASE', '→ 3-ph');
+                    if ($vidPM = @$this->GetIDForIdent('Phasenmodus')) { @SetValue($vidPM, 2); }
+                    $this->WriteAttributeInteger('LastCarState', $car);
+                    return; // nach Phasenwechsel kein Amp-Step im selben Tick
+                }
+                if ($pmCur === 2 && $p1 >= $need1) {
+                    $this->sendSet('psm', '1'); // 1-ph
+                    $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
+                    $this->dbgLog('PHASE', '→ 1-ph');
+                    if ($vidPM = @$this->GetIDForIdent('Phasenmodus')) { @SetValue($vidPM, 1); }
+                    $this->WriteAttributeInteger('LastCarState', $car);
+                    return;
+                }
+            }
+        }
+
+        // --- Feinregeln ± RampStepA ---
+        if ($targetW < $minTargetW || $targetA <= 0) { $this->WriteAttributeInteger('LastCarState', $car); return; }
+
         $minA = (int)$this->ReadPropertyInteger('MinAmp');
         $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
         $vidA = @$this->GetIDForIdent('Ampere_A');
         $curA = $vidA ? (int)@GetValue($vidA) : (int)$this->ReadAttributeInteger('LastAmpSet');
         if ($curA <= 0) $curA = $minA;
-        if ($targetA === $curA) return;
+        if ($targetA === $curA) { $this->WriteAttributeInteger('LastCarState', $car); return; }
 
-        // Schrittweise ± RampStepA
         $step  = (int)$this->ReadPropertyInteger('RampStepA') ?: 1;
         $nextA = ($targetA > $curA) ? min($curA + $step, $maxA) : max($curA - $step, $minA);
 
-        // Senden
         $this->sendSet('amp', (string)$nextA);
         if ($vidA) @SetValue($vidA, $nextA);
         $this->WriteAttributeInteger('LastAmpSet',    $nextA);
         $this->WriteAttributeInteger('LastPublishMs', $nowMs);
         $this->dbgLog('RAMP_SLOW', sprintf('A %d → %d (Ziel=%d, ZielW=%dW)', $curA, $nextA, $targetA, $targetW));
+
+        $this->WriteAttributeInteger('LastCarState', $car);
     }
 
     // -------------------------
