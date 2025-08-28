@@ -335,10 +335,17 @@ public function Create()
 
         // Ziel (Phasen/A) für Anzeige
         [$pmCalc,$aCalc,$txt] = $this->targetPhaseAmp((int)$targetW);
-        // Falls targetPhaseAmp keinen fertigen Text liefert:
-        if ($txt === null || $txt === '') {
-            $txt = sprintf('%s · %d A · ≈ %.1f kW', ($pmCalc===3?'3-phasig':'1-phasig'), max(0,$aCalc), max(0,$targetW)/1000);
-        }
+        // Immer eigenen Text mit Leistung bauen
+        $U      = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
+        $nPhase = ($pmCalc === 3) ? 3 : 1;
+
+        // Wenn $targetW>0, das verwenden. Sonst aus A·U·Phasen abschätzen.
+        $wCalc  = (int)round(($targetW > 0) ? $targetW : ($aCalc * $U * $nPhase));
+
+        // Format "1-phasig · 6 A · ≈ 1,4 kW"
+        $phaseTxt = ($nPhase === 3) ? '3-phasig' : '1-phasig';
+        $txt = sprintf('%s · %d A · ≈ %.1f kW', $phaseTxt, max(0,$aCalc), max(0,$wCalc)/1000.0);
+
         $this->SetValueSafe('Regelziel', $txt);
         $this->WriteAttributeInteger('Slow_LastCalcA', max(0,$aCalc));
 
