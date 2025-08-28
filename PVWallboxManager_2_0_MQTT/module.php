@@ -308,25 +308,32 @@ public function Create()
         }
         $this->SetValueSafe('PowerToCar_W', $wbW);
 
-        // Reserve + SoC lesen
-        $reserveW = (int)$this->ReadPropertyInteger('BatteryReserveW');
-        $batSocID = (int)$this->ReadPropertyInteger('VarBatterySoc_ID');
-        $batSoc   = ($batSocID>0 && @IPS_VariableExists($batSocID)) ? (float)@GetValue($batSocID) : -1.0;
-        $minSoc   = (int)$this->ReadPropertyInteger('BatteryMinSocForPV');
+// Reserve + SoC lesen
+$reserveW = (int)$this->ReadPropertyInteger('BatteryReserveW');
+$batSocID = (int)$this->ReadPropertyInteger('VarBatterySoc_ID');
+$batSoc   = ($batSocID>0 && @IPS_VariableExists($batSocID)) ? (float)@GetValue($batSocID) : -1.0;
+$minSoc   = (int)$this->ReadPropertyInteger('BatteryMinSocForPV');
 
-        // Auto verbunden?
-        $connected = in_array($car, [2,3,4], true); // lädt | verbunden/bereit | Ladung beendet
+// Auto verbunden?
+$connected = in_array($car, [2,3,4], true);
 
-        // Batterieabzug nur wenn kein Auto ODER SoC < Mindest-SoC
-        $battForCalc = ($connected && $batSoc >= 0 && $batSoc >= $minSoc) ? 0 : $battCharge;
+// Batterieabzug nur wenn kein Auto ODER SoC < Mindest-SoC
+$battForCalc = ($connected && $batSoc >= 0 && $batSoc >= $minSoc) ? 0 : $battCharge;
 
-        // --- Überschuss: PV − Batt(ggf.) − Haus + WB ---
-        $surplusRaw = max(0, $pv - $battForCalc - $houseTotal + $wbW);
+// --- Überschuss: PV − Batt(ggf.) − Haus + WB ---
+$surplusRaw = max(0, $pv - $battForCalc - $houseTotal + $wbW);
 
-        // Zielleistung
-        $targetW = max(0, $ema - max(0, $reserveW));
-        if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
-        $this->WriteAttributeInteger('Slow_TargetW', (int)$targetW);
+// Glättung (EMA)
+$alpha   = min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0));
+$emaPrev = (int)$this->ReadAttributeInteger('SlowSurplusW'); // definiert
+$ema     = (int)round($alpha * $surplusRaw + (1.0 - $alpha) * $emaPrev);
+$this->WriteAttributeInteger('SlowSurplusW', $ema);
+$this->WriteAttributeInteger('Slow_SurplusRaw', $surplusRaw);
+
+// Zielleistung
+$targetW = max(0, $ema - max(0, $reserveW));
+if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
+$this->WriteAttributeInteger('Slow_TargetW', (int)$targetW);
 
         // Mindestziel ohne Elvis
         $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW');
