@@ -381,7 +381,7 @@ $this->WriteAttributeInteger('Slow_TargetW', (int)$targetW);
         $this->dbgLog('PV-Überschuss', sprintf(
             'PV=%s - Batt(Laden)=%s - Haus=%s + WB=%s ⇒ Roh=%s | EMA=%s (α=%.2f) | Reserve=%s | Ziel=%s, ZielA=%s @ %d V · %s | SoC=%s%% (min %d%%)',
             $fmtW($pv), $fmtW($battCharge), $fmtW($houseTotal), $fmtW($wbW),
-            $fmtW($surplusRaw), $fmtW($ema), (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0,
+            $fmtW($surplusRaw), $fmtW((int)$ema), (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0,
             $fmtW($reserveW), $fmtW($targetW), $fmtA($aCalc), (int)$U, $phTxt,
             ($batSoc>=0? (int)round($batSoc): -1), $minSoc
         ));
