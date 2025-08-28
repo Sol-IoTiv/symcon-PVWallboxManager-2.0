@@ -120,6 +120,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterAttributeInteger('LastPublishMs', 0);
         $this->RegisterAttributeInteger('LastPhaseMode', 0);
         $this->RegisterAttributeInteger('LastPhaseSwitchMs', 0);
+        $this->RegisterAttributeInteger('SlowSurplusW', 0);
         $this->RegisterAttributeInteger('SmoothSurplusW', 0);
         $this->RegisterAttributeInteger('LastAmpChangeMs', 0);
         $this->RegisterAttributeInteger('Slow_LastCalcA', 0);
