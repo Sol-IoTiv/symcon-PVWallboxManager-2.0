@@ -16,130 +16,137 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     // -------------------------
     // Lifecycle
     // -------------------------
-    public function Create()
-    {
-        parent::Create();
+public function Create()
+{
+    parent::Create();
 
-        // --- Debug ---
-        $this->RegisterPropertyBoolean('DebugPVWM', false);
-        $this->RegisterPropertyBoolean('DebugMQTT', false);
+    // --- Debug ---
+    $this->RegisterPropertyBoolean('DebugPVWM', false);
+    $this->RegisterPropertyBoolean('DebugMQTT', false);
 
-        // --- MQTT Basis ---
-        $this->RegisterPropertyString('BaseTopic', '');            // leer => Auto
-        $this->RegisterAttributeString('AutoBaseTopic', '');       // erkannter Stamm
-        $this->RegisterPropertyString('DeviceIDFilter', '');       // z.B. "285450"
-        $this->RegisterAttributeString('MQTT_BUF', '{}');
+    // --- MQTT Basis ---
+    $this->RegisterPropertyString('BaseTopic', '');
+    $this->RegisterAttributeString('AutoBaseTopic', '');
+    $this->RegisterPropertyString('DeviceIDFilter', '');
+    $this->RegisterAttributeString('MQTT_BUF', '{}');
 
-        // --- Energiequellen ---
-        $this->RegisterPropertyInteger('VarPV_ID', 0);
-        $this->RegisterPropertyString('VarPV_Unit', 'W');
-        $this->RegisterPropertyInteger('VarHouse_ID', 0);
-        $this->RegisterPropertyString('VarHouse_Unit', 'W');
-        $this->RegisterPropertyInteger('VarBattery_ID', 0);
-        $this->RegisterPropertyString('VarBattery_Unit', 'W');
-        $this->RegisterPropertyBoolean('BatteryPositiveIsCharge', true);
+    // --- Energiequellen ---
+    $this->RegisterPropertyInteger('VarPV_ID', 0);
+    $this->RegisterPropertyString('VarPV_Unit', 'W');
+    $this->RegisterPropertyInteger('VarHouse_ID', 0);
+    $this->RegisterPropertyString('VarHouse_Unit', 'W');
+    $this->RegisterPropertyInteger('VarBattery_ID', 0);
+    $this->RegisterPropertyString('VarBattery_Unit', 'W');
+    $this->RegisterPropertyBoolean('BatteryPositiveIsCharge', true);
 
-        // Batterie-Logik
-        $this->RegisterPropertyInteger('VarBatterySoc_ID', 0);   // Variable-ID SoC [%]
-        $this->RegisterPropertyInteger('BatteryMinSocForPV', 90); // Mindest-SoC [%]
-        $this->RegisterPropertyInteger('BatteryReserveW', 300);   // Reserve [W]
+    // Batterie-Logik
+    $this->RegisterPropertyInteger('VarBatterySoc_ID', 0);
+    $this->RegisterPropertyInteger('BatteryMinSocForPV', 90);
+    $this->RegisterPropertyInteger('BatteryReserveW', 300);
 
-        // --- Start/Stop-Hysterese ---
-        $this->RegisterPropertyInteger('StartThresholdW', 1400);
-        $this->RegisterPropertyInteger('StopThresholdW', 1100);
-        $this->RegisterPropertyInteger('StartCycles', 3);
-        $this->RegisterPropertyInteger('StopCycles', 3);
+    // --- Start/Stop-Hysterese ---
+    $this->RegisterPropertyInteger('StartThresholdW', 1400);
+    $this->RegisterPropertyInteger('StopThresholdW', 1100);
+    $this->RegisterPropertyInteger('StartCycles', 3);
+    $this->RegisterPropertyInteger('StopCycles', 3);
 
-        // --- Phasenumschaltung (Konfig beibehalten, Slow nutzt sie nicht aktiv) ---
-        $this->RegisterPropertyInteger('ThresTo1p_W', 3680);
-        $this->RegisterPropertyInteger('To1pCycles', 3);
-        $this->RegisterPropertyInteger('ThresTo3p_W', 4140);
-        $this->RegisterPropertyInteger('To3pCycles', 3);
-        $this->RegisterPropertyBoolean('SnapOnConnect', true);   // sofort auf Ziel-A
-        $this->RegisterPropertyBoolean('AutoPhase', true);       // 1p/3p automatisch
+    // --- Phasenumschaltung ---
+    $this->RegisterPropertyInteger('ThresTo1p_W', 3680);
+    $this->RegisterPropertyInteger('To1pCycles', 3);
+    $this->RegisterPropertyInteger('ThresTo3p_W', 4140);
+    $this->RegisterPropertyInteger('To3pCycles', 3);
+    $this->RegisterPropertyBoolean('SnapOnConnect', true);
+    $this->RegisterPropertyBoolean('AutoPhase', true);
 
-        // --- Netz-/Strom-Parameter & Zeiten ---
-        $this->RegisterPropertyInteger('MinAmp', 6);
-        $this->RegisterPropertyInteger('MaxAmp', 16);
-        $this->RegisterPropertyInteger('NominalVolt', 230);
-        $this->RegisterPropertyInteger('MinHoldAfterPhaseMs', 30000);
-        $this->RegisterPropertyInteger('MinPublishGapMs', 5000);   // Slow: 5 s reichen
-        $this->RegisterPropertyInteger('WBSubtractMinW', 100);
-        $this->RegisterPropertyInteger('StartReserveW', 200);
-        $this->RegisterPropertyInteger('MinOnTimeMs',  60000);
-        $this->RegisterPropertyInteger('MinOffTimeMs', 15000);
-        $this->RegisterPropertyInteger('RampStepA', 1);         // Schrittweite in A
+    // --- Netz-/Strom-Parameter & Zeiten ---
+    $this->RegisterPropertyInteger('MinAmp', 6);
+    $this->RegisterPropertyInteger('MaxAmp', 16);
+    $this->RegisterPropertyInteger('NominalVolt', 230);
+    $this->RegisterPropertyInteger('MinHoldAfterPhaseMs', 30000);
+    $this->RegisterPropertyInteger('MinPublishGapMs', 5000);
+    $this->RegisterPropertyInteger('WBSubtractMinW', 100);
+    $this->RegisterPropertyInteger('StartReserveW', 200);
+    $this->RegisterPropertyInteger('MinOnTimeMs',  60000);
+    $this->RegisterPropertyInteger('MinOffTimeMs', 15000);
+    $this->RegisterPropertyInteger('RampStepA', 1);
 
-        // --- Slow-Control (neu) ---
-        $this->RegisterPropertyBoolean('SlowControlEnabled', true);
-        $this->RegisterPropertyInteger('ControlIntervalSec', 15);      // 10..30 s
-        $this->RegisterPropertyInteger('SlowAlphaPermille', 250);      // 0..1000 (0.25)
+    // --- Slow-Control (bleibt intern, kein eigener WebFront-Schalter) ---
+    $this->RegisterPropertyBoolean('SlowControlEnabled', true);
+    $this->RegisterPropertyInteger('ControlIntervalSec', 15);
+    $this->RegisterPropertyInteger('SlowAlphaPermille', 250);
 
-        // --- Profile ---
-        $this->ensureProfiles();
+    // --- Profile ---
+    $this->ensureProfiles(); // stellt u. a. PVWM.Mode, PVWM.FRC, PVWM.Phasen, GoE.Amp bereit
 
-        // --- Kern-Variablen ---
-        $this->RegisterVariableInteger('Mode', 'Lademodus', 'PVWM.Mode', 5); // 0=PV, 1=Manuell, 2=Aus
-        $this->EnableAction('Mode');
+    // --- Kern-Variablen (WebFront) ---
+    // 0=PV-Automatik, 1=Manuell (fix), 2=Nur Anzeige
+    $this->RegisterVariableInteger('Mode', 'Lademodus', 'PVWM.Mode', 5);
+    $this->EnableAction('Mode');
 
-        $this->RegisterVariableInteger('Ampere_A',   'Ampere [A]', 'GoE.Amp', 10);
-        $this->EnableAction('Ampere_A');
+    $this->RegisterVariableInteger('Ampere_A', 'Ampere [A]', 'GoE.Amp', 10);
+    $this->EnableAction('Ampere_A');
 
-        $this->RegisterVariableInteger('Leistung_W', 'Leistung [W]', '~Watt', 20);
-        $this->RegisterVariableInteger('HouseNet_W', 'Hausverbrauch (ohne WB) [W]', '~Watt', 21);
-        $this->RegisterVariableInteger('CarState',   'Fahrzeugstatus', 'GoE.CarState', 25);
+    // Ladeleistung zum Fahrzeug
+    $this->RegisterVariableInteger('PowerToCar_W', 'Ladeleistung [W]', '~Watt', 20);
 
-        $this->RegisterVariableInteger('FRC', 'Force State (FRC)', 'GoE.ForceState', 50);
-        $this->EnableAction('FRC');
+    $this->RegisterVariableInteger('HouseNet_W', 'Hausverbrauch (ohne WB) [W]', '~Watt', 21);
 
-        $this->RegisterVariableInteger('Phasenmodus', 'Phasenmodus', 'GoE.PhaseMode', 60); // 1=1p, 2=3p
-        $this->EnableAction('Phasenmodus');
+    $this->RegisterVariableInteger('CarState', 'Fahrzeugstatus', 'GoE.CarState', 25);
 
-        $this->RegisterVariableInteger('Uhrzeit', 'Uhrzeit', '~UnixTimestamp', 70);
+    // FRC deutsch beschriftet
+    $this->RegisterVariableInteger('FRC', 'Ladefreigabe-Modus', 'PVWM.FRC', 40);
+    $this->EnableAction('FRC');
 
-        // --- Slow UI/Control Variablen ---
-        $this->RegisterVariableBoolean('SlowControlActive', 'Slow-Regler aktiv', '~Switch', 6);
-        $this->EnableAction('SlowControlActive');
-        $this->RegisterVariableInteger('TargetA_Live', 'Ziel Ampere (live)', 'GoE.Amp', 12);
-        $this->RegisterVariableInteger('TargetW_Live', 'Zielleistung (live)', '~Watt', 13);
-        $this->RegisterPropertyInteger('TargetMinW', 1380);  // Zielleistung erst ab diesem Wert anzeigen
-        $this->RegisterVariableString('TargetPhaseAmp', 'Ziel (Phasen/A)', '~TextBox', 125);
+    // 1=1p, 3=3p
+    $this->RegisterVariableInteger('Phasenmodus', 'Phasenmodus', 'PVWM.Phasen', 50);
+    $this->EnableAction('Phasenmodus');
 
-        // --- Attribute ---
-        $this->RegisterAttributeInteger('LastFrcChangeMs', 0);
-        $this->RegisterAttributeInteger('WB_ActivePhases', 1);
-        $this->RegisterAttributeInteger('WB_W_Smooth', 0);
-        $this->RegisterAttributeInteger('WB_SubtractActive', 0);
-        $this->RegisterAttributeInteger('WB_SubtractChangedMs', 0);
+    $this->RegisterVariableInteger('Uhrzeit', 'Uhrzeit', '~UnixTimestamp', 70);
 
-        $this->RegisterAttributeInteger('CntStart', 0);
-        $this->RegisterAttributeInteger('CntStop', 0);
-        $this->RegisterAttributeInteger('CntTo1p', 0);
-        $this->RegisterAttributeInteger('CntTo3p', 0);
-        $this->RegisterAttributeInteger('LastAmpSet', 0);
-        $this->RegisterAttributeInteger('LastPublishMs', 0);
-        $this->RegisterAttributeInteger('LastPhaseMode', 0);
-        $this->RegisterAttributeInteger('LastPhaseSwitchMs', 0);
-        $this->RegisterAttributeInteger('SlowSurplusW', 0);
-        $this->RegisterAttributeInteger('SmoothSurplusW', 0);
-        $this->RegisterAttributeInteger('LastAmpChangeMs', 0);
-        $this->RegisterAttributeInteger('Slow_LastCalcA', 0);
+    // Kompakte Zielanzeige (ersetzt einzelne Ziel-Variablen)
+    $this->RegisterVariableString('Regelziel', 'Regelziel', '~TextBox', 80);
 
-        $this->RegisterAttributeInteger('Slow_SurplusRaw', 0);
-        $this->RegisterAttributeInteger('Slow_AboveStartMs', 0);
-        $this->RegisterAttributeInteger('Slow_BelowStopMs', 0);
+    // --- Altlasten entfernen / migrieren ---
+    @ $this->UnregisterVariable('SlowControlActive');     // „Slow-Regler aktiv“ entfällt
+    @ $this->UnregisterVariable('TargetA_Live');          // ersetzt durch Regelziel
+    @ $this->UnregisterVariable('TargetW_Live');          // ersetzt durch Regelziel
+    @ $this->UnregisterVariable('TargetPhaseAmp');        // ersetzt durch Regelziel
+    @ $this->UnregisterVariable('Leistung_W');            // durch PowerToCar_W ersetzt
 
-        $this->RegisterAttributeInteger('LastCarState', 0);
-        $this->RegisterAttributeInteger('Phase_Above3pMs', 0);
-        $this->RegisterAttributeInteger('Phase_Below1pMs', 0);
+    // --- Attribute ---
+    $this->RegisterAttributeInteger('LastFrcChangeMs', 0);
+    $this->RegisterAttributeInteger('WB_ActivePhases', 1);
+    $this->RegisterAttributeInteger('WB_W_Smooth', 0);
+    $this->RegisterAttributeInteger('WB_SubtractActive', 0);
+    $this->RegisterAttributeInteger('WB_SubtractChangedMs', 0);
 
-        // --- Timer ---
-        $this->RegisterTimer('LOOP', 0, $this->modulePrefix().'_Loop($_IPS["TARGET"]);'); // bleibt vorhanden, aber in Slow aus
-        //$this->RegisterTimer('SLOW_TickUI', 0, $this->modulePrefix().'_SLOW_TickUI($_IPS["TARGET"]);');
-        $this->RegisterTimer('SLOW_TickUI', 0, 'IPS_RequestAction($_IPS["TARGET"], "DoSlowTickUI", 0);');
-        $this->RegisterTimer('SLOW_TickControl', 0, 'IPS_RequestAction($_IPS["TARGET"], "DoSlowTickControl", 0);');
-        //$this->RegisterTimer('SLOW_TickControl', 0, $this->modulePrefix().'_SLOW_TickControl($_IPS["TARGET"]);');
-    }
+    $this->RegisterAttributeInteger('CntStart', 0);
+    $this->RegisterAttributeInteger('CntStop', 0);
+    $this->RegisterAttributeInteger('CntTo1p', 0);
+    $this->RegisterAttributeInteger('CntTo3p', 0);
+    $this->RegisterAttributeInteger('LastAmpSet', 0);
+    $this->RegisterAttributeInteger('LastPublishMs', 0);
+    $this->RegisterAttributeInteger('LastPhaseMode', 0);
+    $this->RegisterAttributeInteger('LastPhaseSwitchMs', 0);
+    $this->RegisterAttributeInteger('SlowSurplusW', 0);
+    $this->RegisterAttributeInteger('SmoothSurplusW', 0);
+    $this->RegisterAttributeInteger('LastAmpChangeMs', 0);
+    $this->RegisterAttributeInteger('Slow_LastCalcA', 0);
+
+    $this->RegisterAttributeInteger('Slow_SurplusRaw', 0);
+    $this->RegisterAttributeInteger('Slow_AboveStartMs', 0);
+    $this->RegisterAttributeInteger('Slow_BelowStopMs', 0);
+
+    $this->RegisterAttributeInteger('LastCarState', 0);
+    $this->RegisterAttributeInteger('Phase_Above3pMs', 0);
+    $this->RegisterAttributeInteger('Phase_Below1pMs', 0);
+
+    // --- Timer ---
+    $this->RegisterTimer('LOOP', 0, $this->modulePrefix().'_Loop($_IPS["TARGET"]);');
+    $this->RegisterTimer('SLOW_TickUI', 0, 'IPS_RequestAction($_IPS["TARGET"], "DoSlowTickUI", 0);');
+    $this->RegisterTimer('SLOW_TickControl', 0, 'IPS_RequestAction($_IPS["TARGET"], "DoSlowTickControl", 0);');
+}
+
 
     public function ApplyChanges()
     {
