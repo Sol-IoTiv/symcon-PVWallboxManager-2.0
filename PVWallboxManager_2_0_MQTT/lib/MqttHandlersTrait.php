@@ -48,32 +48,35 @@ trait MqttHandlersTrait
         }
 
         switch ($key) {
-            case 'ama':
-            case 'amp':
+            case 'amp':     // Sollstrom
+            case 'ama':     // einige FW senden hier den aktuellen Grenzwert mit
             {
                 $new = (int)$payload;
                 $old = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
                 if ($old !== $new) {
                     $this->SetValueSafe('Ampere_A', $new);
+                    $this->WriteAttributeInteger('LastAmpSet', $new);
                     $this->dbgChanged('Ampere @'.$topic, $old.' A', $new.' A');
                 }
                 break;
             }
 
-            case 'psm':
+            case 'psm':     // 1 = 1-phasig, 2 = 3-phasig  → UI: 1 | 3
             {
-                $new = (int)$payload; // 1/2
+                $raw = trim($payload, "\" \t\n\r\0\x0B");
+                $new = ((string)$raw === '2' || (int)$raw === 2) ? 3 : 1;
                 $old = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus'));
                 if ($old !== $new) {
                     $this->SetValueSafe('Phasenmodus', $new);
+                    $this->WriteAttributeInteger('WB_ActivePhases', $new);
                     $this->dbgChanged('Phasenmodus @'.$topic, $this->phaseModeLabel($old), $this->phaseModeLabel($new));
                 }
                 break;
             }
 
-            case 'frc':
+            case 'frc':     // 0 Neutral | 1 Stop | 2 Start
             {
-                $new = (int)$payload; // 0/1/2
+                $new = (int)$payload;
                 $old = (int)@GetValue(@$this->GetIDForIdent('FRC'));
                 if ($old !== $new) {
                     $this->SetValueSafe('FRC', $new);
@@ -117,7 +120,7 @@ trait MqttHandlersTrait
 
             case 'nrg':
             {
-                // Nur Log. Kein parse/store, keine Loop hier.
+                // Nur puffern/loggen. Auswertung zeitentkoppelt.
                 $this->dbgMqtt('NRG', $topic . ' = ' . $payload);
                 break;
             }
@@ -126,21 +129,18 @@ trait MqttHandlersTrait
                 break;
         }
 
-        // --- NEU: Frame puffern + One-Shot LOOP auslösen ---
+        // --- Puffer aktualisieren + One-Shot Anzeige-Update ---
         $buf = json_decode($this->ReadAttributeString('MQTT_BUF'), true) ?: [];
         $buf[$key] = $payload;
         $this->WriteAttributeString('MQTT_BUF', json_encode($buf, JSON_UNESCAPED_SLASHES));
-
-        // Coalescing: deine vorhandene LOOP-Timer-Instanz als One-Shot verwenden
         $this->scheduleUpdateFromMqtt(350);
 
-        // WICHTIG: kein parseAndStoreNRG(), kein updateHouseNetFromInputs(), keine Loop() direkt hier.
         return;
     }
 
     private function parseAndStoreNRG(string $payload): void
     {
-        // nrg: U(L1,L2,L3,N)[0..3], I(L1,L2,L3)[4..6], P(L1,L2,L3,N,Total)[7..11], pf(L1,L2,L3,N)[12..15]
+        // nrg: U(L1,L2,L3,N)[0..3], I(L1,L2,L3)[4..6], P(L1,L2,L3,N,Total)[7..11], pf(L1..)[12..15]
         $p = trim($payload, "\" \t\n\r\0\x0B");
         $arr = ($p !== '' && $p[0] === '[') ? @json_decode($p, true) : null;
         if (!is_array($arr)) {
@@ -149,17 +149,10 @@ trait MqttHandlersTrait
         }
         if (!is_array($arr)) return;
 
-        // Gesamtleistung
-        if (isset($arr[11]) && is_numeric($arr[11])) {
-            $ptotal = (int)round((float)$arr[11]);
-            $this->SetValueSafe('Leistung_W', $ptotal);
-            $this->dbgLog('NRG→Leistung_W', $ptotal.' W');
-        }
-
-        // Effektive Phasen: bevorzugt Strom (I), Mindestschwelle 1.0 A
+        // Effektive Phasen bestimmen
         $U           = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
-        $pmDeclared  = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p, 2=3p
-        $phDeclared  = ($pmDeclared === 2) ? 3 : 1;
+        $pmDeclared  = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p, 3=3p
+        $phDeclared  = ($pmDeclared === 3) ? 3 : 1;
         $I_THRESH_A  = 1.0;
 
         $i1 = $arr[4] ?? null;  $i2 = $arr[5] ?? null;  $i3 = $arr[6] ?? null;
@@ -167,21 +160,21 @@ trait MqttHandlersTrait
 
         $phEff = 0; $via = 'declared';
 
-        // 1) Über Strom (präferiert)
+        // 1) Über Strom
         if ($i1 !== null && $i2 !== null && $i3 !== null) {
             $phEff = (int)((float)$i1 >= $I_THRESH_A) + (int)((float)$i2 >= $I_THRESH_A) + (int)((float)$i3 >= $I_THRESH_A);
-            if ($phEff > 0) $via = 'I>=3A';
+            if ($phEff > 0) $via = 'I>=1A';
         }
 
-        // 2) Fallback über Leistung je Phase ~ (≈ U * 1A * Faktor)
+        // 2) Fallback über Leistung je Phase
         if ($phEff === 0 && $p1 !== null && $p2 !== null && $p3 !== null) {
             $thW = (int)round($U * $I_THRESH_A * 0.9); // ~207 W bei 230 V
             $phEff = (int)((float)$p1 >= $thW) + (int)((float)$p2 >= $thW) + (int)((float)$p3 >= $thW);
             if ($phEff > 0) $via = 'P≈U*1A';
         }
 
-        if ($phEff <= 0) $phEff = $phDeclared; // letzter Fallback
-        if ($phDeclared === 1) $phEff = 1;     // Kontaktor 1p begrenzt
+        if ($phEff <= 0) $phEff = $phDeclared;
+        if ($phDeclared === 1) $phEff = 1; // Kontaktor 1p begrenzt
         $phEff = min(3, max(1, $phEff));
 
         $this->WriteAttributeInteger('WB_ActivePhases', $phEff);
@@ -191,6 +184,7 @@ trait MqttHandlersTrait
             (float)$i1, (float)$i2, (float)$i3,
             (float)$p1, (float)$p2, (float)$p3
         ));
-    }
 
+        // KEIN Setzen von Leistungs-Variablen hier. PowerToCar_W wird in SLOW_TickUI berechnet.
+    }
 }
