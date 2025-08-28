@@ -39,6 +39,11 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterPropertyString('VarBattery_Unit', 'W');
         $this->RegisterPropertyBoolean('BatteryPositiveIsCharge', true);
 
+        // Batterie-Logik
+        $this->RegisterPropertyInteger('VarBatterySoc_ID', 0);   // Variable-ID SoC [%]
+        $this->RegisterPropertyInteger('BatteryMinSocForPV', 90); // Mindest-SoC [%]
+        $this->RegisterPropertyInteger('BatteryReserveW', 300);   // Reserve [W]
+
         // --- Start/Stop-Hysterese ---
         $this->RegisterPropertyInteger('StartThresholdW', 1400);
         $this->RegisterPropertyInteger('StopThresholdW', 1100);
@@ -259,19 +264,17 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         }
 
         // Status / Netz
-        $pm = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p, 2=3p
+        $pm    = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p, 2=3p
         $phEff = (int)$this->ReadAttributeInteger('WB_ActivePhases');
         if ($phEff < 1 || $phEff > 3) { $phEff = ($pm===2) ? 3 : 1; }
-        $U    = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
-        $minA = (int)$this->ReadPropertyInteger('MinAmp');
-        $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
+        $U     = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
 
         // Laden aktiv?
         $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));      // 2 = Start
         $car = (int)@GetValue(@$this->GetIDForIdent('CarState')); // 2 = lädt
         $charging = ($frc === 2) && ($car === 2);
 
-        // WB-Leistung: NRG[11] (nur wenn geladen), sonst 0; Fallback aus A*U*Phasen
+        // WB-Leistung
         $wbW = 0;
         if ($charging) {
             $nrg = $this->mqttBufGet('nrg', null);
@@ -286,32 +289,43 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         }
         $this->SetValueSafe('Leistung_W', $wbW);
 
-        // --- Überschuss für Wallbox: PV − Batt(Laden) − Haus + WB ---
+        // --- Überschuss: PV − Batt(Laden) − Haus + WB ---
         $surplusRaw = max(0, $pv - $battCharge - $houseTotal + $wbW);
 
-        // Glättung (EMA) für Anzeige/Ziel
-        $alpha   = min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0));
-        $prevEMA = (int)$this->ReadAttributeInteger('SmoothSurplusW');
-        $surplus = (int)round($alpha*$surplusRaw + (1.0-$alpha)*$prevEMA);
-        $this->WriteAttributeInteger('SmoothSurplusW', $surplus);
+        // Reserve abziehen + Batterie-SoC prüfen
+        $reserveW = (int)$this->ReadPropertyInteger('BatteryReserveW');
+        $batSocID = (int)$this->ReadPropertyInteger('VarBatterySoc_ID');
+        $batSoc   = ($batSocID>0 && @IPS_VariableExists($batSocID)) ? (float)@GetValue($batSocID) : -1.0;
+        $minSoc   = (int)$this->ReadPropertyInteger('BatteryMinSocForPV');
 
-        // Zielwerte aus geglättetem Überschuss eventuell entferen ???
-        $targetW = $surplus;
-        $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW') ?: 300;
+        // Glättung (EMA)
+        $alpha   = min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0));
+        $prevEMA = (int)$this->ReadAttributeInteger('SlowSurplusW');
+        $ema     = (int)round($alpha*$surplusRaw + (1.0-$alpha)*$prevEMA);
+        $this->WriteAttributeInteger('SlowSurplusW', $ema);
+        $this->WriteAttributeInteger('Slow_SurplusRaw', $surplusRaw);
+
+        // Zielleistung
+        $targetW = max(0, $ema - max(0, $reserveW));
+        if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
+
+        // Mindestziel ohne Elvis
+        $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW');
         if ($targetW < $minTargetW) { $targetW = 0; }
 
-        [$pm,$a,$txt] = $this->targetPhaseAmp((int)$targetW);
+        // Ziel (Phasen/A) für Anzeige
+        [$pmCalc,$aCalc,$txt] = $this->targetPhaseAmp((int)$targetW);
         $this->SetValueSafe('TargetPhaseAmp', $txt);
 
-        $denom  = $U * max(1,$phEff);
+        // Ziel-A (nur Info)
+        $denom   = $U * max(1,$phEff);
         $targetA = ($targetW > 0 && $denom > 0) ? (int)ceil($targetW / $denom) : 0;
 
         $this->SetValueSafe('TargetW_Live', $targetW);
         $this->SetValueSafe('TargetA_Live', $targetA);
         $this->WriteAttributeInteger('Slow_LastCalcA', $targetA);
 
-        // Sekundenzähler für schnellen FRC (auf Basis der Roh-Formel)
-        $this->WriteAttributeInteger('Slow_SurplusRaw', $surplusRaw);
+        // Start/Stop & Phasenhist
         $startW = (int)$this->ReadPropertyInteger('StartThresholdW');
         $stopW  = (int)$this->ReadPropertyInteger('StopThresholdW');
         $above  = (int)$this->ReadAttributeInteger('Slow_AboveStartMs');
@@ -320,6 +334,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $below  = ($surplusRaw <= $stopW)  ? min($below + 1000, 3600000) : 0;
         $this->WriteAttributeInteger('Slow_AboveStartMs', $above);
         $this->WriteAttributeInteger('Slow_BelowStopMs',  $below);
+
         $thr3 = (int)$this->ReadPropertyInteger('ThresTo3p_W');
         $thr1 = (int)$this->ReadPropertyInteger('ThresTo1p_W');
         $p3   = (int)$this->ReadAttributeInteger('Phase_Above3pMs');
@@ -329,24 +344,16 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->WriteAttributeInteger('Phase_Above3pMs', $p3);
         $this->WriteAttributeInteger('Phase_Below1pMs', $p1);
 
-        // ---- Log "PV-Überschuss" (übersichtlich, mit Einheiten) ----
+        // Debug
         $fmtW = static function ($w): string { return number_format((int)round($w), 0, ',', '.') . ' W'; };
         $fmtA = static function ($a): string { return number_format((int)round($a), 0, ',', '.') . ' A'; };
         $phTxt = (max(1, $phEff) === 3) ? '3p' : '1p';
-
         $this->dbgLog('PV-Überschuss', sprintf(
-            'PV=%s - Batt(Laden)=%s - Haus=%s + WB=%s ⇒ Roh=%s | EMA=%s (α=%.2f) | Ziel=%s, ZielA=%s @ %d V · %s',
-            $fmtW($pv),
-            $fmtW($battCharge),
-            $fmtW($houseTotal),
-            $fmtW($wbW),
-            $fmtW($surplusRaw),
-            $fmtW($surplus),
-            min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0)),
-            $fmtW($targetW),
-            $fmtA($targetA),
-            (int)$U,
-            $phTxt
+            'PV=%s - Batt(Laden)=%s - Haus=%s + WB=%s ⇒ Roh=%s | EMA=%s (α=%.2f) | Reserve=%s | Ziel=%s, ZielA=%s @ %d V · %s | SoC=%s%% (min %d%%)',
+            $fmtW($pv), $fmtW($battCharge), $fmtW($houseTotal), $fmtW($wbW),
+            $fmtW($surplusRaw), $fmtW($ema), (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0,
+            $fmtW($reserveW), $fmtW($targetW), $fmtA($targetA), (int)$U, $phTxt,
+            ($batSoc>=0? (int)round($batSoc): -1), $minSoc
         ));
     }
 
@@ -361,7 +368,13 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         $vidTW   = @$this->GetIDForIdent('TargetW_Live');
         $targetW = $vidTW ? (int)@GetValue($vidTW) : (int)$this->ReadAttributeInteger('SlowSurplusW');
-        $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW'); // kein ?: 300
+        $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW'); // kein Elvis
+
+        // Batterie-SoC prüfen (Sicherheitsgurt)
+        $batSocID = (int)$this->ReadPropertyInteger('VarBatterySoc_ID');
+        $batSoc   = ($batSocID>0 && @IPS_VariableExists($batSocID)) ? (float)@GetValue($batSocID) : -1.0;
+        $minSoc   = (int)$this->ReadPropertyInteger('BatteryMinSocForPV');
+        if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
 
         $car = (int)@GetValue(@$this->GetIDForIdent('CarState'));
         $connected = in_array($car, [1,2,3,4], true);
@@ -391,10 +404,9 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             return;
         }
 
-        // FRC nicht frei → nichts regeln
-        if ($frc !== 2) { $this->WriteAttributeInteger('LastCarState', $car); return; }
+        // FRC nicht frei / Timing nicht ok
+        if ($frc !== 2 || ($nowMs - $lastPub) < $gapMs) { $this->WriteAttributeInteger('LastCarState', $car); return; }
         if (!$connected) { $this->WriteAttributeInteger('LastCarState', $car); return; }
-        if ($targetW < $minTargetW || ($nowMs - $lastPub) < $gapMs) { $this->WriteAttributeInteger('LastCarState', $car); return; }
 
         // Auto-Phasenwechsel mit Sperrzeit
         if ($this->ReadPropertyBoolean('AutoPhase')) {
@@ -411,7 +423,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                     $this->sendSet('psm', '2'); if ($vidPM=@$this->GetIDForIdent('Phasenmodus')) @SetValue($vidPM,2);
                     $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
                     $this->WriteAttributeInteger('LastCarState', $car);
-                    return; // nicht im selben Tick die Ampere ändern
+                    return; // im selben Tick kein Ampere-Step
                 }
                 if ($pmCur === 2 && $p1 >= $need1) {
                     $this->sendSet('psm', '1'); if ($vidPM=@$this->GetIDForIdent('Phasenmodus')) @SetValue($vidPM,1);
@@ -422,17 +434,18 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             }
         }
 
-        // Feinregelung um Ziel-A (aus targetPhaseAmp)
+        // Feinregelung um Ziel-A aus aktueller Ziel-W
+        [$pmNow,$aNow] = $this->targetPhaseAmp($targetW);
         $minA = (int)$this->ReadPropertyInteger('MinAmp');
         $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
         $vidA = @$this->GetIDForIdent('Ampere_A');
         $curA = $vidA ? (int)@GetValue($vidA) : (int)$this->ReadAttributeInteger('LastAmpSet');
         if ($curA <= 0) $curA = $minA;
 
-        $targetA = $a; // direkt aus Ziel-W berechnet
+        $targetA = $aNow;
         if ($targetA === $curA) { $this->WriteAttributeInteger('LastCarState', $car); return; }
 
-        $step  = (int)$this->ReadPropertyInteger('RampStepA') ?: 1;
+        $step  = (int)$this->ReadPropertyInteger('RampStepA'); if ($step <= 0) $step = 1;
         $nextA = ($targetA > $curA) ? min($curA + $step, $maxA) : max($curA - $step, $minA);
 
         $this->sendSet('amp', (string)$nextA);
@@ -517,6 +530,44 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                     ['type'=>'NumberSpinner','name'=>'WBSubtractMinW','caption'=>'WB-Abzug ab','suffix'=>' W'],
                     ['type'=>'Label','caption'=>'WB-Leistung erst ab diesem Wert vom Hausverbrauch abziehen.'],
                 ]],
+                [ "type"    => "ExpansionPanel",
+                    "caption" => "🔋 Intelligente Batterie-Logik (PV zuerst Akku, dann Auto)",
+                    "items"   => [
+                        [
+                        "type"        => "SelectVariable",
+                        "name"        => "VarBatterySoc_ID",
+                        "caption"     => "Batterie-SoC Variable [%]",
+                        "validTypes"  => [1, 2],              // Integer/Float
+                        "required"    => false,
+                        "width"       => "600px",
+                        "suffix"      => "",
+                        "visible"     => true
+                        ],
+                        [
+                        "type"    => "NumberSpinner",
+                        "name"    => "BatteryMinSocForPV",
+                        "caption" => "Mindest-SoC bevor Auto laden darf",
+                        "minimum" => 0,
+                        "maximum" => 100,
+                        "suffix"  => " %",
+                        "width"   => "200px"
+                        ],
+                        [
+                        "type"    => "NumberSpinner",
+                        "name"    => "BatteryReserveW",
+                        "caption" => "Haus-/Akku-Reserve",
+                        "minimum" => 0,
+                        "maximum" => 10000,
+                        "suffix"  => " W",
+                        "width"   => "200px"
+                        ],
+                        [
+                        "type"    => "Label",
+                        "caption" => "Erlaubt Laden nur wenn SoC ≥ Mindest-SoC. "
+                                    . "ReserveW wird vom PV-Überschuss abgezogen."
+                        ]
+                    ]
+                ],
                 [ 'type'=>'ExpansionPanel','caption'=>'🐢 Slow-Control','items'=>[
                     ['type'=>'CheckBox','name'=>'SlowControlEnabled','caption'=>'aktiv'],
                     ['type'=>'NumberSpinner','name'=>'ControlIntervalSec','caption'=>'Regelintervall','minimum'=>10,'maximum'=>30,'suffix'=>' s'],
