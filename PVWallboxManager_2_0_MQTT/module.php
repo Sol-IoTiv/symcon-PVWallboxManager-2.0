@@ -368,11 +368,13 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));
 
         // --- STOP-Bedingung strikt ---
+        $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV, 1=Manuell, 2=Aus
         if (!$connected || $targetW < $minTargetW) {
-            if ($frc !== 1) {
-                $this->sendSet('frc', '1');
-                if ($vid=@$this->GetIDForIdent('FRC')) @SetValue($vid, 1);
-                $this->dbgLog('FRC', 'Stop: kein Fahrzeug oder TargetW < Min');
+            $targetFrc = ($mode === 2) ? 1 : 0; // Aus=hart sperren, sonst neutral warten
+            if ($frc !== $targetFrc) {
+                $this->sendSet('frc', (string)$targetFrc);
+                if ($vid=@$this->GetIDForIdent('FRC')) @SetValue($vid, $targetFrc);
+                $this->dbgLog('FRC', $targetFrc ? 'Stop (hart): kein PV/kein Auto' : 'Warten (neutral): kein PV/kein Auto');
             }
             return;
         }
