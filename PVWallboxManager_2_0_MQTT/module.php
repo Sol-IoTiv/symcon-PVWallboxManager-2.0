@@ -308,21 +308,20 @@ public function Create()
         }
         $this->SetValueSafe('PowerToCar_W', $wbW);
 
-        // --- Überschuss: PV − Batt(Laden) − Haus + WB ---
-        $surplusRaw = max(0, $pv - $battCharge - $houseTotal + $wbW);
-
-        // Reserve abziehen + Batterie-SoC prüfen
+        // Reserve + SoC lesen
         $reserveW = (int)$this->ReadPropertyInteger('BatteryReserveW');
         $batSocID = (int)$this->ReadPropertyInteger('VarBatterySoc_ID');
         $batSoc   = ($batSocID>0 && @IPS_VariableExists($batSocID)) ? (float)@GetValue($batSocID) : -1.0;
         $minSoc   = (int)$this->ReadPropertyInteger('BatteryMinSocForPV');
 
-        // Glättung (EMA)
-        $alpha   = min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0));
-        $prevEMA = (int)$this->ReadAttributeInteger('SlowSurplusW');
-        $ema     = (int)round($alpha*$surplusRaw + (1.0-$alpha)*$prevEMA);
-        $this->WriteAttributeInteger('SlowSurplusW', $ema);
-        $this->WriteAttributeInteger('Slow_SurplusRaw', $surplusRaw);
+        // Auto verbunden?
+        $connected = in_array($car, [2,3,4], true); // lädt | verbunden/bereit | Ladung beendet
+
+        // Batterieabzug nur wenn kein Auto ODER SoC < Mindest-SoC
+        $battForCalc = ($connected && $batSoc >= 0 && $batSoc >= $minSoc) ? 0 : $battCharge;
+
+        // --- Überschuss: PV − Batt(ggf.) − Haus + WB ---
+        $surplusRaw = max(0, $pv - $battForCalc - $houseTotal + $wbW);
 
         // Zielleistung
         $targetW = max(0, $ema - max(0, $reserveW));
@@ -386,16 +385,11 @@ public function Create()
         if (!$this->ReadPropertyBoolean('SlowControlEnabled')) return;
         if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 2) return;
 
-//        if (!(bool)@GetValue(@$this->GetIDForIdent('SlowControlActive'))) return;
-//        if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 2) return;
-
         $nowMs   = (int)(microtime(true)*1000);
         $gapMs   = (int)$this->ReadPropertyInteger('MinPublishGapMs');
         $lastPub = (int)$this->ReadAttributeInteger('LastPublishMs');
 
-//        $vidTW   = @$this->GetIDForIdent('TargetW_Live');
         $targetW = (int)$this->ReadAttributeInteger('Slow_TargetW');
-//        $targetW = $vidTW ? (int)@GetValue($vidTW) : (int)$this->ReadAttributeInteger('SlowSurplusW');
         $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW'); // kein Elvis
 
         // Batterie-SoC prüfen (Sicherheitsgurt)
@@ -423,7 +417,6 @@ public function Create()
         // --- START nur wenn OK ---
         if ($frc !== 2 && ($nowMs - $lastPub) >= $gapMs) {
             [$pm,$a] = $this->targetPhaseAmp($targetW);
-//            $this->sendSet('psm', (string)$pm);
             $this->sendSet('psm', ($pm===3) ? '2' : '1');
             $this->setCurrentLimitA($a);
             $this->sendSet('frc', '2');
@@ -449,7 +442,6 @@ public function Create()
                 $need1 = max(1,(int)$this->ReadPropertyInteger('To1pCycles')) * 1000;
 
                 if ($pmCur === 1 && $p3 >= $need3) {
-//                    $this->sendSet('psm', '2'); if ($vidPM=@$this->GetIDForIdent('Phasenmodus')) @SetValue($vidPM,2);
                     $this->sendSet('psm', '2'); if ($vidPM=@$this->GetIDForIdent('Phasenmodus')) @SetValue($vidPM,3);
                     $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
                     $this->WriteAttributeInteger('LastCarState', $car);
