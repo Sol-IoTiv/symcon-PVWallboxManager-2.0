@@ -497,93 +497,113 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     // -------------------------
     // Form
     // -------------------------
-    public function GetConfigurationForm()
-    {
-        $U    = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
-        $minA = (int)$this->ReadPropertyInteger('MinAmp');
-        $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
-        $thr3 = 3 * max(1, $minA) * $U;
-        $thr1 = max(1, $maxA) * $U;
-        $msHint = '⏱ 1 000 ms = 1 s · 10 000 ms = 10 s · 30 000 ms = 30 s';
+public function GetConfigurationForm()
+{
+    $U    = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
+    $minA = (int)$this->ReadPropertyInteger('MinAmp');
+    $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
+    $thr3 = 3 * max(1, $minA) * $U;
+    $thr1 = max(1, $maxA) * $U;
+    $msHint = '⏱ 1 000 ms = 1 s · 10 000 ms = 10 s · 30 000 ms = 30 s';
 
-        return json_encode([
-            'elements' => [
-                [ 'type'=>'ExpansionPanel','caption'=>'🔌 Wallbox','items'=>[
-                    ['type'=>'ValidationTextBox','name'=>'BaseTopic','caption'=>'Base-Topic (go-eCharger/285450)'],
-                    ['type'=>'ValidationTextBox','name'=>'DeviceIDFilter','caption'=>'Device-ID Filter (optional)'],
-                    ['type'=>'RowLayout','items'=>[
-                        ['type'=>'NumberSpinner','name'=>'MinAmp','caption'=>'Min. Ampere','minimum'=>1,'maximum'=>32,'suffix'=>' A'],
-                        ['type'=>'NumberSpinner','name'=>'MaxAmp','caption'=>'Max. Ampere','minimum'=>1,'maximum'=>32,'suffix'=>' A'],
-                        ['type'=>'NumberSpinner','name'=>'NominalVolt','caption'=>'Netzspannung','minimum'=>200,'maximum'=>245,'suffix'=>' V'],
-                    ]],
-                    ['type'=>'Label','caption'=>"⚙️ Richtwerte: 3P Start ≈ {$thr3} W · 1P unter ≈ {$thr1} W"],
-                ]],
-                [ 'type'=>'ExpansionPanel','caption'=>'⚡ Eingänge','items'=>[
-                    ['type'=>'SelectVariable','name'=>'VarPV_ID','caption'=>'PV-Leistung'],
-                    ['type'=>'SelectVariable','name'=>'VarHouse_ID','caption'=>'Haus gesamt (inkl. WB)'],
-                    ['type'=>'SelectVariable','name'=>'VarBattery_ID','caption'=>'Batterie (optional)'],
-                    ['type'=>'RowLayout','items'=>[
-                        ['type'=>'Select','name'=>'VarPV_Unit','caption'=>'PV Einheit','options'=>[['caption'=>'W','value'=>'W'],['caption'=>'kW','value'=>'kW']]],
-                        ['type'=>'Select','name'=>'VarHouse_Unit','caption'=>'Haus Einheit','options'=>[['caption'=>'W','value'=>'W'],['caption'=>'kW','value'=>'kW']]],
-                        ['type'=>'Select','name'=>'VarBattery_Unit','caption'=>'Batt Einheit','options'=>[['caption'=>'W','value'=>'W'],['caption'=>'kW','value'=>'kW']]],
-                    ]],
-                    ['type'=>'CheckBox','name'=>'BatteryPositiveIsCharge','caption'=>'+ bedeutet Laden'],
-                    ['type'=>'NumberSpinner','name'=>'WBSubtractMinW','caption'=>'WB-Abzug ab','suffix'=>' W'],
-                    ['type'=>'Label','caption'=>'WB-Leistung erst ab diesem Wert vom Hausverbrauch abziehen.'],
-                ]],
-                [ "type"    => "ExpansionPanel",
-                    "caption" => "🔋 Intelligente Batterie-Logik (PV zuerst Akku, dann Auto)",
-                    "items"   => [
-                        [
-                        "type"        => "SelectVariable",
-                        "name"        => "VarBatterySoc_ID",
-                        "caption"     => "Batterie-SoC Variable [%]",
-                        "validTypes"  => [1, 2],              // Integer/Float
-                        "required"    => false,
-                        "width"       => "600px",
-                        "suffix"      => "",
-                        "visible"     => true
-                        ],
-                        [
-                        "type"    => "NumberSpinner",
-                        "name"    => "BatteryMinSocForPV",
-                        "caption" => "Mindest-SoC bevor Auto laden darf",
-                        "minimum" => 0,
-                        "maximum" => 100,
-                        "suffix"  => " %",
-                        "width"   => "200px"
-                        ],
-                        [
-                        "type"    => "NumberSpinner",
-                        "name"    => "BatteryReserveW",
-                        "caption" => "Haus-/Akku-Reserve",
-                        "minimum" => 0,
-                        "maximum" => 10000,
-                        "suffix"  => " W",
-                        "width"   => "200px"
-                        ],
-                        [
-                        "type"    => "Label",
-                        "caption" => "Erlaubt Laden nur wenn SoC ≥ Mindest-SoC. "
-                                    . "ReserveW wird vom PV-Überschuss abgezogen."
+    return json_encode([
+        'elements' => [
+            [
+                'type'    => 'ExpansionPanel',
+                'caption' => '🔌 Wallbox',
+                'items'   => [
+                    ['type' => 'ValidationTextBox', 'name' => 'BaseTopic',      'caption' => 'Base-Topic (go-eCharger/285450)'],
+                    ['type' => 'ValidationTextBox', 'name' => 'DeviceIDFilter', 'caption' => 'Device-ID Filter (optional)'],
+                    [
+                        'type'  => 'RowLayout',
+                        'items' => [
+                            ['type' => 'NumberSpinner', 'name' => 'MinAmp',      'caption' => 'Min. Ampere', 'minimum' => 1,   'maximum' => 32,  'suffix' => ' A'],
+                            ['type' => 'NumberSpinner', 'name' => 'MaxAmp',      'caption' => 'Max. Ampere', 'minimum' => 1,   'maximum' => 32,  'suffix' => ' A'],
+                            ['type' => 'NumberSpinner', 'name' => 'NominalVolt', 'caption' => 'Netzspannung','minimum' => 200, 'maximum' => 245, 'suffix' => ' V'],
                         ]
-                    ]
-                ],
-                [ 'type'=>'ExpansionPanel','caption'=>'🐢 Slow-Control','items'=>[
-                    ['type'=>'CheckBox','name'=>'SlowControlEnabled','caption'=>'aktiv'],
-                    ['type'=>'NumberSpinner','name'=>'ControlIntervalSec','caption'=>'Regelintervall','minimum'=>10,'maximum'=>30,'suffix'=>' s'],
-                    ['type'=>'NumberSpinner','name'=>'SlowAlphaPermille','caption'=>'Glättung α','minimum'=>0,'maximum'=>1000,'suffix'=>' ‰'],
-                    ['type'=>'Label','caption'=>'Anzeige 1 Hz live. Regelung ±1 A pro Intervall.'],
-                ]],
-                [ 'type'=>'ExpansionPanel','caption'=>'🪲 Debug','items'=>[
-                    ['type'=>'CheckBox','name'=>'DebugPVWM','caption'=>'Modul-Debug (Regellogik)'],
-                    ['type'=>'CheckBox','name'=>'DebugMQTT','caption'=>'MQTT-Rohdaten loggen'],
-                    ['type'=>'Label','caption'=>'Ausgabe im Meldungen-Fenster.'],
-                ]],
+                    ],
+                    ['type' => 'Label', 'caption' => "⚙️ Richtwerte: 3P Start ≈ {$thr3} W · 1P unter ≈ {$thr1} W"],
+                ]
             ],
-            'actions'=>[
-                ['type'=>'Label','caption'=>$msHint]
-            ]
-        ], JSON_UNESCAPED_UNICODE);
-    }
+            [
+                'type'    => 'ExpansionPanel',
+                'caption' => '⚡ Eingänge',
+                'items'   => [
+                    ['type' => 'SelectVariable', 'name' => 'VarPV_ID',     'caption' => 'PV-Leistung'],
+                    ['type' => 'SelectVariable', 'name' => 'VarHouse_ID',  'caption' => 'Haus gesamt (inkl. WB)'],
+                    ['type' => 'SelectVariable', 'name' => 'VarBattery_ID','caption' => 'Batterie (optional)'],
+                    [
+                        'type'  => 'RowLayout',
+                        'items' => [
+                            ['type' => 'Select', 'name' => 'VarPV_Unit',     'caption' => 'PV Einheit',   'options' => [['caption' => 'W','value' => 'W'],   ['caption' => 'kW','value' => 'kW']]],
+                            ['type' => 'Select', 'name' => 'VarHouse_Unit',  'caption' => 'Haus Einheit', 'options' => [['caption' => 'W','value' => 'W'],   ['caption' => 'kW','value' => 'kW']]],
+                            ['type' => 'Select', 'name' => 'VarBattery_Unit','caption' => 'Batt Einheit', 'options' => [['caption' => 'W','value' => 'W'],   ['caption' => 'kW','value' => 'kW']]],
+                        ]
+                    ],
+                    ['type' => 'CheckBox',      'name' => 'BatteryPositiveIsCharge', 'caption' => '+ bedeutet Laden'],
+                    ['type' => 'NumberSpinner', 'name' => 'WBSubtractMinW',          'caption' => 'WB-Abzug ab', 'suffix' => ' W'],
+                    ['type' => 'Label',         'caption' => 'WB-Leistung erst ab diesem Wert vom Hausverbrauch abziehen.'],
+                ]
+            ],
+            [
+                'type'    => 'ExpansionPanel',
+                'caption' => '🔋 Intelligente Batterie-Logik (PV zuerst Akku, dann Auto)',
+                'items'   => [
+                    [
+                        'type'       => 'SelectVariable',
+                        'name'       => 'VarBatterySoc_ID',
+                        'caption'    => 'Batterie-SoC Variable [%]',
+                        'validTypes' => [1, 2], // Integer/Float
+                        'required'   => false,
+                        'width'      => '600px'
+                    ],
+                    [
+                        'type'    => 'NumberSpinner',
+                        'name'    => 'BatteryMinSocForPV',
+                        'caption' => 'Mindest-SoC bevor Auto laden darf',
+                        'minimum' => 0,
+                        'maximum' => 100,
+                        'suffix'  => ' %',
+                        'width'   => '200px'
+                    ],
+                    [
+                        'type'    => 'NumberSpinner',
+                        'name'    => 'BatteryReserveW',
+                        'caption' => 'Haus-/Akku-Reserve',
+                        'minimum' => 0,
+                        'maximum' => 10000,
+                        'suffix'  => ' W',
+                        'width'   => '200px'
+                    ],
+                    [
+                        'type'    => 'Label',
+                        'caption' => 'Erlaubt Laden nur wenn SoC ≥ Mindest-SoC. ReserveW wird vom PV-Überschuss abgezogen.'
+                    ]
+                ]
+            ],
+            [
+                'type'    => 'ExpansionPanel',
+                'caption' => '🐢 Slow-Control',
+                'items'   => [
+                    ['type' => 'CheckBox',      'name' => 'SlowControlEnabled',  'caption' => 'aktiv'],
+                    ['type' => 'NumberSpinner', 'name' => 'ControlIntervalSec',  'caption' => 'Regelintervall', 'minimum' => 10, 'maximum' => 30,  'suffix' => ' s'],
+                    ['type' => 'NumberSpinner', 'name' => 'SlowAlphaPermille',   'caption' => 'Glättung α',     'minimum' => 0,  'maximum' => 1000,'suffix' => ' ‰'],
+                    ['type' => 'Label',         'caption' => 'Anzeige 1 Hz live. Regelung ±1 A pro Intervall.'],
+                ]
+            ],
+            [
+                'type'    => 'ExpansionPanel',
+                'caption' => '🪲 Debug',
+                'items'   => [
+                    ['type' => 'CheckBox', 'name' => 'DebugPVWM', 'caption' => 'Modul-Debug (Regellogik)'],
+                    ['type' => 'CheckBox', 'name' => 'DebugMQTT', 'caption' => 'MQTT-Rohdaten loggen'],
+                    ['type' => 'Label',    'caption' => 'Ausgabe im Meldungen-Fenster.'],
+                ]
+            ],
+        ],
+        'actions' => [
+            ['type' => 'Label', 'caption' => $msHint]
+        ]
+    ], JSON_UNESCAPED_UNICODE);
+}
 }
