@@ -220,40 +220,42 @@ public function Create()
     public function RequestAction($Ident, $Value)
     {
         switch ($Ident) {
-            case 'Mode': // 0=PV-Automatik, 1=Manuell, 2=Nur Anzeige
+            case 'DoSlowTickUI':
+                $this->SLOW_TickUI();
+                return;
+
+            case 'DoSlowTickControl':
+                $this->SLOW_TickControl();
+                return;
+
+            case 'Mode':
                 $this->SetValueSafe('Mode', in_array((int)$Value,[0,1,2],true)?(int)$Value:0);
-                break;
+                return;
 
             case 'Ampere_A':
                 $this->setCurrentLimitA((int)$Value);
-                break;
+                return;
 
-            case 'Phasenmodus': // UI: 1|3  → go-e psm: '1'| '2'
-            {
-                if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 2) return; // Nur Anzeige
-
+            case 'Phasenmodus': {
+                if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 2) return;
                 $pm  = ((int)$Value === 3) ? 3 : 1;
                 $old = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus'));
                 if ($pm === $old) return;
-
                 $this->SetValueSafe('Phasenmodus', $pm);
                 $this->sendSet('psm', ($pm === 3) ? '2' : '1');
-
-                $nowMs = (int)(microtime(true) * 1000);
+                $nowMs = (int)(microtime(true)*1000);
                 $this->WriteAttributeInteger('LastPhaseMode', $pm);
                 $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
-                break;
+                return;
             }
 
-            case 'FRC': // PVWM.FRC
+            case 'FRC':
                 $frc = in_array((int)$Value,[0,1,2],true)?(int)$Value:0;
                 $this->SetValueSafe('FRC', $frc);
                 $this->sendSet('frc', (string)$frc);
-                break;
-
-            default:
-                throw new Exception("Invalid Ident $Ident");
+                return;
         }
+        throw new Exception("Invalid Ident $Ident");
     }
 
     // -------------------------
