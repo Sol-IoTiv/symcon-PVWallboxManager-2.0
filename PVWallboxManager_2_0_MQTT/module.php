@@ -359,27 +359,33 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $gapMs   = (int)$this->ReadPropertyInteger('MinPublishGapMs');
         $lastPub = (int)$this->ReadAttributeInteger('LastPublishMs');
 
-        // Zielwerte ermitteln
         $vidTW   = @$this->GetIDForIdent('TargetW_Live');
-        $targetW = $vidTW ? (int)@GetValue($vidTW) : (int)$this->ReadAttributeInteger('SlowSurplusW'); // vereinheitlicht
-        $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW'); // kein Elvis-Operator
-        [$pm,$a] = $this->targetPhaseAmp($targetW);                   // Ziel-Phase/A aus Ziel-W
+        $targetW = $vidTW ? (int)@GetValue($vidTW) : (int)$this->ReadAttributeInteger('SlowSurplusW');
+        $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW'); // kein ?: 300
 
-        // Fahrzeugstatus
         $car = (int)@GetValue(@$this->GetIDForIdent('CarState'));
         $connected = in_array($car, [1,2,3,4], true);
         $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));
 
-        // Startbedingung: verbunden, Zielleistung ≥ Min, Publish-Gap ok
-        if ($frc !== 2 && $connected && $targetW >= $minTargetW && ($nowMs - $lastPub) >= $gapMs) {
-            // genau hier Phase/A setzen und erst dann freigeben
+        // --- STOP-Bedingung strikt ---
+        if (!$connected || $targetW < $minTargetW) {
+            if ($frc !== 1) {
+                $this->sendSet('frc', '1');
+                if ($vid=@$this->GetIDForIdent('FRC')) @SetValue($vid, 1);
+                $this->dbgLog('FRC', 'Stop: kein Fahrzeug oder TargetW < Min');
+            }
+            return;
+        }
+
+        // --- START nur wenn OK ---
+        if ($frc !== 2 && ($nowMs - $lastPub) >= $gapMs) {
+            [$pm,$a] = $this->targetPhaseAmp($targetW);
             $this->sendSet('psm', (string)$pm);
             $this->setCurrentLimitA($a);
             $this->sendSet('frc', '2');
-            if ($vidA = @$this->GetIDForIdent('Ampere_A')) @SetValue($vidA, $a);
+            if ($vidA=@$this->GetIDForIdent('Ampere_A')) @SetValue($vidA, $a);
             $this->WriteAttributeInteger('LastAmpSet',    $a);
             $this->WriteAttributeInteger('LastPublishMs', $nowMs);
-            $this->WriteAttributeInteger('LastCarState',  $car);
             return;
         }
 
