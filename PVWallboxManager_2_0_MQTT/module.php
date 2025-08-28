@@ -350,7 +350,9 @@ $this->WriteAttributeInteger('Slow_TargetW', (int)$targetW);
 
         // Format "1-phasig · 6 A · ≈ 1,4 kW"
         $phaseTxt = ($nPhase === 3) ? '3-phasig' : '1-phasig';
-        $txt = sprintf('%s · %d A · ≈ %.1f kW', $phaseTxt, max(0,$aCalc), max(0,$wCalc)/1000.0);
+        $wSet     = (int)round(max(0,$aCalc) * $U * $nPhase); // Setpoint-Leistung
+        $txt      = sprintf('%s · %d A · ≈ %.1f kW (PV-Ziel %.1f kW)',
+                           $phaseTxt, max(0,$aCalc), $wSet/1000.0, max(0,$targetW)/1000.0);
 
         $this->SetValueSafe('Regelziel', $txt);
         $this->WriteAttributeInteger('Slow_LastCalcA', max(0,$aCalc));
