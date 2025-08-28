@@ -74,6 +74,7 @@ public function Create()
     $this->RegisterPropertyBoolean('SlowControlEnabled', true);
     $this->RegisterPropertyInteger('ControlIntervalSec', 15);
     $this->RegisterPropertyInteger('SlowAlphaPermille', 250);
+    $this->RegisterPropertyInteger('TargetMinW', 1380);
 
     // --- Profile ---
     $this->ensureProfiles(); // stellt u. a. PVWM.Mode, PVWM.FRC, PVWM.Phasen, GoE.Amp bereit
@@ -185,7 +186,7 @@ public function Create()
         }
         $houseId = (int)$this->ReadPropertyInteger('VarHouse_ID');
         if ($houseId > 0 && @IPS_VariableExists($houseId)) { @ $this->RegisterMessage($houseId, VM_UPDATE); @ $this->RegisterReference($houseId); }
-        if ($wbVid = @$this->GetIDForIdent('Leistung_W')) { @ $this->RegisterMessage($wbVid, VM_UPDATE); }
+        if ($wbVid = @$this->GetIDForIdent('PowerToCar_W')) { @ $this->RegisterMessage($wbVid, VM_UPDATE); }
 
         // Timer: Slow aktiv, klassische LOOP aus
         $this->SetTimerInterval('LOOP', 0);
@@ -205,7 +206,7 @@ public function Create()
     {
         if ($Message !== VM_UPDATE) return;
         $houseId = (int)$this->ReadPropertyInteger('VarHouse_ID');
-        $wbVid   = @$this->GetIDForIdent('Leistung_W');
+        $wbVid   = @$this->GetIDForIdent('PowerToCar_W');
         if ($SenderID === $houseId || $SenderID === $wbVid) {
             $this->dbgLog('HN-Trigger', 'VM_UPDATE → Recalc HouseNet');
             $this->RecalcHausverbrauchAbzWallbox(true);
@@ -218,32 +219,39 @@ public function Create()
     public function RequestAction($Ident, $Value)
     {
         switch ($Ident) {
-            case 'Mode':
-                $mode = in_array((int)$Value, [0,1,2], true) ? (int)$Value : 0;
-                $this->SetValueSafe('Mode', $mode);
+            case 'Mode': // 0=PV-Automatik, 1=Manuell, 2=Nur Anzeige
+                $this->SetValueSafe('Mode', in_array((int)$Value,[0,1,2],true)?(int)$Value:0);
                 break;
-            case 'SlowControlActive':
-                $this->SetValueSafe('SlowControlActive', (bool)$Value);
-                break;
+
             case 'Ampere_A':
                 $this->setCurrentLimitA((int)$Value);
                 break;
-            case 'Phasenmodus':
-                $pm = ((int)$Value === 2) ? 2 : 1;
-                $this->sendSet('psm', (string)$pm);
+
+            case 'Phasenmodus': // UI: 1|3  → go-e psm: '1'| '2'
+            {
+                if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 2) return; // Nur Anzeige
+
+                $pm  = ((int)$Value === 3) ? 3 : 1;
+                $old = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus'));
+                if ($pm === $old) return;
+
                 $this->SetValueSafe('Phasenmodus', $pm);
+                $this->sendSet('psm', ($pm === 3) ? '2' : '1');
+
+                $nowMs = (int)(microtime(true) * 1000);
+                $this->WriteAttributeInteger('LastPhaseMode', $pm);
+                $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
                 break;
-            case 'FRC':
-                $frc = in_array((int)$Value, [0,1,2], true) ? (int)$Value : 0;
-                $this->sendSet('frc', (string)$frc);
+            }
+
+            case 'FRC': // PVWM.FRC
+                $frc = in_array((int)$Value,[0,1,2],true)?(int)$Value:0;
                 $this->SetValueSafe('FRC', $frc);
+                $this->sendSet('frc', (string)$frc);
                 break;
-            case 'DoSlowTickUI':
-                $this->SLOW_TickUI();
-                return;
-            case 'DoSlowTickControl':
-                $this->SLOW_TickControl();
-                return;
+
+            default:
+                throw new Exception("Invalid Ident $Ident");
         }
     }
 
@@ -272,9 +280,9 @@ public function Create()
         }
 
         // Status / Netz
-        $pm    = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p, 2=3p
+        $pm    = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p, 3=3p
         $phEff = (int)$this->ReadAttributeInteger('WB_ActivePhases');
-        if ($phEff < 1 || $phEff > 3) { $phEff = ($pm===2) ? 3 : 1; }
+        if ($phEff < 1 || $phEff > 3) { $phEff = ($pm===3) ? 3 : 1; }
         $U     = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
 
         // Laden aktiv?
@@ -295,7 +303,7 @@ public function Create()
                 $wbW = (int)round($ampLive * $U * max(1, $phEff));
             }
         }
-        $this->SetValueSafe('Leistung_W', $wbW);
+        $this->SetValueSafe('PowerToCar_W', $wbW);
 
         // --- Überschuss: PV − Batt(Laden) − Haus + WB ---
         $surplusRaw = max(0, $pv - $battCharge - $houseTotal + $wbW);
@@ -316,6 +324,7 @@ public function Create()
         // Zielleistung
         $targetW = max(0, $ema - max(0, $reserveW));
         if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
+        $this->WriteAttributeInteger('Slow_TargetW', (int)$targetW);
 
         // Mindestziel ohne Elvis
         $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW');
@@ -323,15 +332,12 @@ public function Create()
 
         // Ziel (Phasen/A) für Anzeige
         [$pmCalc,$aCalc,$txt] = $this->targetPhaseAmp((int)$targetW);
-        $this->SetValueSafe('TargetPhaseAmp', $txt);
-
-        // Ziel-A (nur Info)
-        $denom   = $U * max(1,$phEff);
-        $targetA = ($targetW > 0 && $denom > 0) ? (int)ceil($targetW / $denom) : 0;
-
-        $this->SetValueSafe('TargetW_Live', $targetW);
-        $this->SetValueSafe('TargetA_Live', $targetA);
-        $this->WriteAttributeInteger('Slow_LastCalcA', $targetA);
+        // Falls targetPhaseAmp keinen fertigen Text liefert:
+        if ($txt === null || $txt === '') {
+            $txt = sprintf('%s · %d A · ≈ %.1f kW', ($pmCalc===3?'3-phasig':'1-phasig'), max(0,$aCalc), max(0,$targetW)/1000);
+        }
+        $this->SetValueSafe('Regelziel', $txt);
+        $this->WriteAttributeInteger('Slow_LastCalcA', max(0,$aCalc));
 
         // Start/Stop & Phasenhist
         $startW = (int)$this->ReadPropertyInteger('StartThresholdW');
@@ -360,22 +366,26 @@ public function Create()
             'PV=%s - Batt(Laden)=%s - Haus=%s + WB=%s ⇒ Roh=%s | EMA=%s (α=%.2f) | Reserve=%s | Ziel=%s, ZielA=%s @ %d V · %s | SoC=%s%% (min %d%%)',
             $fmtW($pv), $fmtW($battCharge), $fmtW($houseTotal), $fmtW($wbW),
             $fmtW($surplusRaw), $fmtW($ema), (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0,
-            $fmtW($reserveW), $fmtW($targetW), $fmtA($targetA), (int)$U, $phTxt,
+            $fmtW($reserveW), $fmtW($targetW), $fmtA($aCalc), (int)$U, $phTxt,
             ($batSoc>=0? (int)round($batSoc): -1), $minSoc
         ));
     }
 
     public function SLOW_TickControl(): void
     {
-        if (!(bool)@GetValue(@$this->GetIDForIdent('SlowControlActive'))) return;
+        if (!$this->ReadPropertyBoolean('SlowControlEnabled')) return;
         if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 2) return;
+
+//        if (!(bool)@GetValue(@$this->GetIDForIdent('SlowControlActive'))) return;
+//        if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 2) return;
 
         $nowMs   = (int)(microtime(true)*1000);
         $gapMs   = (int)$this->ReadPropertyInteger('MinPublishGapMs');
         $lastPub = (int)$this->ReadAttributeInteger('LastPublishMs');
 
-        $vidTW   = @$this->GetIDForIdent('TargetW_Live');
-        $targetW = $vidTW ? (int)@GetValue($vidTW) : (int)$this->ReadAttributeInteger('SlowSurplusW');
+//        $vidTW   = @$this->GetIDForIdent('TargetW_Live');
+        $targetW = (int)$this->ReadAttributeInteger('Slow_TargetW');
+//        $targetW = $vidTW ? (int)@GetValue($vidTW) : (int)$this->ReadAttributeInteger('SlowSurplusW');
         $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW'); // kein Elvis
 
         // Batterie-SoC prüfen (Sicherheitsgurt)
@@ -403,7 +413,8 @@ public function Create()
         // --- START nur wenn OK ---
         if ($frc !== 2 && ($nowMs - $lastPub) >= $gapMs) {
             [$pm,$a] = $this->targetPhaseAmp($targetW);
-            $this->sendSet('psm', (string)$pm);
+//            $this->sendSet('psm', (string)$pm);
+            $this->sendSet('psm', ($pm===3) ? '2' : '1');
             $this->setCurrentLimitA($a);
             $this->sendSet('frc', '2');
             if ($vidA=@$this->GetIDForIdent('Ampere_A')) @SetValue($vidA, $a);
@@ -428,12 +439,13 @@ public function Create()
                 $need1 = max(1,(int)$this->ReadPropertyInteger('To1pCycles')) * 1000;
 
                 if ($pmCur === 1 && $p3 >= $need3) {
-                    $this->sendSet('psm', '2'); if ($vidPM=@$this->GetIDForIdent('Phasenmodus')) @SetValue($vidPM,2);
+//                    $this->sendSet('psm', '2'); if ($vidPM=@$this->GetIDForIdent('Phasenmodus')) @SetValue($vidPM,2);
+                    $this->sendSet('psm', '2'); if ($vidPM=@$this->GetIDForIdent('Phasenmodus')) @SetValue($vidPM,3);
                     $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
                     $this->WriteAttributeInteger('LastCarState', $car);
                     return; // im selben Tick kein Ampere-Step
                 }
-                if ($pmCur === 2 && $p1 >= $need1) {
+                if ($pmCur === 3 && $p1 >= $need1) {
                     $this->sendSet('psm', '1'); if ($vidPM=@$this->GetIDForIdent('Phasenmodus')) @SetValue($vidPM,1);
                     $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
                     $this->WriteAttributeInteger('LastCarState', $car);
@@ -481,7 +493,7 @@ public function Create()
         $houseTotal = (int)round((float)$this->readVarWUnit('VarHouse_ID','VarHouse_Unit'));
 
         // WB-Leistung aus eigener Variablen (positiv). Fallback: Trait.
-        $wbVid = @$this->GetIDForIdent('Leistung_W');
+        $wbVid = @$this->GetIDForIdent('PowerToCar_W');
         $wb    = $wbVid ? (int)@GetValue($wbVid) : (int)round(max(0.0, (float)$this->getWBPowerW()));
         if ($wb < 0) $wb = 0;
 

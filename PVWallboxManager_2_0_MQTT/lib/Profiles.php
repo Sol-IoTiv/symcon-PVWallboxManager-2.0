@@ -13,8 +13,8 @@ trait Profiles
         IPS_SetVariableProfileAssociation('GoE.CarState', 0, 'Unbekannt/Firmwarefehler', '', -1);
         IPS_SetVariableProfileAssociation('GoE.CarState', 1, 'Bereit, kein Fahrzeug',   '', -1);
         IPS_SetVariableProfileAssociation('GoE.CarState', 2, 'Fahrzeug lädt',          '', -1);
-        IPS_SetVariableProfileAssociation('GoE.CarState', 3, 'Verbunden / bereit',     '', -1);
-        IPS_SetVariableProfileAssociation('GoE.CarState', 4, 'Ladung beendet',         '', -1);
+        IPS_SetVariableProfileAssociation('GoE.CarState', 3, 'Verbunden / bereit zum Laden',     '', -1);
+        IPS_SetVariableProfileAssociation('GoE.CarState', 4, 'Ladung beendet, Fahrzeug verbunden',         '', -1);
         IPS_SetVariableProfileAssociation('GoE.CarState', 5, 'Fehler',                 '', -1);
 
         // --- Ampere

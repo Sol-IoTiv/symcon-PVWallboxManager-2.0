@@ -285,6 +285,12 @@ trait Helpers
         $a   = max($this->minAmp(), min($this->maxAmp(), $a));
         $txt = ($pm === 2 ? '3-phasig' : '1-phasig') . ' / ' . $a . ' A';
         return [$pm, $a, $txt];
-}
+    }
+
+    private function updateRegelziel(int $targetW, int $pmCalc, int $aCalc): void
+    {
+        $txt = sprintf('%s · %d A · ≈ %.1f kW', ($pmCalc===3?'3-phasig':'1-phasig'), max(0,$aCalc), max(0,$targetW)/1000);
+        $this->SetValueSafe('Regelziel', $txt);
+    }
 
 }
