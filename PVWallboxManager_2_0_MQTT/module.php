@@ -133,6 +133,7 @@ public function Create()
     $this->RegisterAttributeInteger('SmoothSurplusW', 0);
     $this->RegisterAttributeInteger('LastAmpChangeMs', 0);
     $this->RegisterAttributeInteger('Slow_LastCalcA', 0);
+    $this->RegisterAttributeInteger('Slow_TargetW', 0);
 
     $this->RegisterAttributeInteger('Slow_SurplusRaw', 0);
     $this->RegisterAttributeInteger('Slow_AboveStartMs', 0);
@@ -395,7 +396,7 @@ public function Create()
         if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
 
         $car = (int)@GetValue(@$this->GetIDForIdent('CarState'));
-        $connected = in_array($car, [1,2,3,4], true);
+        $connected = in_array($car, [2,3,4], true);
         $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));
 
         // --- STOP-Bedingung strikt ---
