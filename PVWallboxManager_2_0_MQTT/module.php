@@ -105,7 +105,7 @@ public function Create()
     $this->RegisterVariableInteger('Uhrzeit', 'Uhrzeit', '~UnixTimestamp', 70);
 
     // Kompakte Zielanzeige (ersetzt einzelne Ziel-Variablen)
-    $this->RegisterVariableString('Regelziel', 'Regelziel', '~TextBox', 80);
+    $this->RegisterVariableString('Regelziel', 'Regelziel', '~String', 80);
 
     // --- Altlasten entfernen / migrieren ---
     @ $this->UnregisterVariable('SlowControlActive');     // „Slow-Regler aktiv“ entfällt
