@@ -267,10 +267,10 @@ public function Create()
 
                 $this->SetValueSafe('Phasenmodus', $pm);
 
-                if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 1) { // Manuell
+                // Manuell: Sequenz im Timer abarbeiten lassen
+                if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 1) {
                     $connected = in_array((int)@GetValue(@$this->GetIDForIdent('CarState')), [2,3,4], true);
-                    if ($connected && (int)@GetValue(@$this->GetIDForIdent('FRC')) === 2) {
-                        // Sequenz im Timer ausführen
+                    if ($connected) {
                         $this->WriteAttributeInteger('PendingPhaseMode', $pm);
                         $this->WriteAttributeInteger('PhaseSwitchState', 0);
                         $this->WriteAttributeInteger('LastPhaseSwitchMs', (int)(microtime(true)*1000));
@@ -279,7 +279,7 @@ public function Create()
                 }
 
                 // Kein Ladevorgang → direkt setzen
-                $this->sendSet('psm', ($pm === 3) ? '2' : '1');
+                $this->sendSet('psm', ($pm===3)?'2':'1');
                 $nowMs = (int)(microtime(true)*1000);
                 $this->WriteAttributeInteger('LastPhaseMode', $pm);
                 $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
@@ -436,65 +436,106 @@ public function Create()
     {
         if (!$this->ReadPropertyBoolean('SlowControlEnabled')) return;
 
-        $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV, 1=Manuell, 2=Aus
-        if ($mode === 2) return; // Aus
+        $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV,1=Manuell,2=Aus
+        if ($mode === 2) return;
 
         $nowMs   = (int)(microtime(true)*1000);
         $gapMs   = (int)$this->ReadPropertyInteger('MinPublishGapMs');
         $lastPub = (int)$this->ReadAttributeInteger('LastPublishMs');
-        $frc     = (int)@GetValue(@$this->GetIDForIdent('FRC'));
-        $car     = (int)@GetValue(@$this->GetIDForIdent('CarState'));
+
+        $frc       = (int)@GetValue(@$this->GetIDForIdent('FRC'));
+        $car       = (int)@GetValue(@$this->GetIDForIdent('CarState'));
         $connected = in_array($car, [2,3,4], true);
 
-        // --- MANUELL (fix): keine SoC-/Reserve-/Schwellwerte, direkt setzen ---
+        // ===== MANUELL (fix) =====
         if ($mode === 1) {
             if (!$connected) { // neutral warten
                 if ($frc !== 0) { $this->sendSet('frc','0'); @SetValue(@$this->GetIDForIdent('FRC'),0); }
                 return;
             }
+
+            // Phasenwechsel-Sequenz (Stop -> psm -> Start)
+            $pend   = (int)$this->ReadAttributeInteger('PendingPhaseMode');   // 0|1|3
+            $pstate = (int)$this->ReadAttributeInteger('PhaseSwitchState');   // 0..3
+            $tmark  = (int)$this->ReadAttributeInteger('LastPhaseSwitchMs');
+            $hold   = max(1500, (int)$this->ReadPropertyInteger('MinHoldAfterPhaseMs'));
+
+            if ($pend !== 0) {
+                switch ($pstate) {
+                    case 0: // Stop
+                        if ($frc !== 1) { $this->sendSet('frc','1'); @SetValue(@$this->GetIDForIdent('FRC'),1); }
+                        $this->WriteAttributeInteger('PhaseSwitchState', 1);
+                        $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
+                        return;
+
+                    case 1: // psm setzen
+                        if ($nowMs - $tmark >= $hold) {
+                            $this->sendSet('psm', ($pend===3)?'2':'1');
+                            $this->WriteAttributeInteger('PhaseSwitchState', 2);
+                            $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
+                        }
+                        return;
+
+                    case 2: // wieder starten
+                        if ($nowMs - $tmark >= 1200) {
+                            $this->sendSet('frc','2'); @SetValue(@$this->GetIDForIdent('FRC'),2);
+                            $this->WriteAttributeInteger('PhaseSwitchState', 3);
+                            $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
+                        }
+                        return;
+
+                    case 3: // Abschluss
+                        if ($nowMs - $tmark >= 800) {
+                            $this->WriteAttributeInteger('PendingPhaseMode', 0);
+                            $this->WriteAttributeInteger('PhaseSwitchState', 0);
+                        }
+                        break;
+                }
+            }
+
+            // On-the-fly halten
             if (($nowMs - $lastPub) < $gapMs) return;
 
-            $pmRaw = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p, 2=3p (MQTT)
-            $pm    = ($pmRaw === 2) ? 3 : 1;
-            $minA  = (int)$this->ReadPropertyInteger('MinAmp');
-            $maxA  = (int)$this->ReadPropertyInteger('MaxAmp');
-            $aSel  = min($maxA, max($minA, (int)@GetValue(@$this->GetIDForIdent('Ampere_A'))));
+            $pmUi = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1|3 (UI)
+            $aSel = min(
+                (int)$this->ReadPropertyInteger('MaxAmp'),
+                max((int)$this->ReadPropertyInteger('MinAmp'),
+                    (int)@GetValue(@$this->GetIDForIdent('Ampere_A')))
+            );
 
-            $this->sendSet('psm', ($pm===3) ? '2' : '1');
+            $this->sendSet('psm', ($pmUi===3)?'2':'1');
             $this->setCurrentLimitA($aSel);
-            if ($frc !== 2) $this->sendSet('frc','2');
+            if ($frc !== 2) { $this->sendSet('frc','2'); @SetValue(@$this->GetIDForIdent('FRC'),2); }
             if ($vidA=@$this->GetIDForIdent('Ampere_A')) @SetValue($vidA, $aSel);
             $this->WriteAttributeInteger('LastAmpSet',    $aSel);
             $this->WriteAttributeInteger('LastPublishMs', $nowMs);
             return;
         }
 
-        // --- PV-AUTOMATIK: (SoC-Gurt hier lassen) ---
-        $targetW = (int)$this->ReadAttributeInteger('Slow_TargetW');
+        // ===== PV-AUTOMATIK =====
+        $targetW    = (int)$this->ReadAttributeInteger('Slow_TargetW');
         $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW');
 
-        // SoC-Gurt nur im PV-Modus
+        // SoC-Gurt nur hier
         $batSocID = (int)$this->ReadPropertyInteger('VarBatterySoc_ID');
         $batSoc   = ($batSocID>0 && @IPS_VariableExists($batSocID)) ? (float)@GetValue($batSocID) : -1.0;
         $minSoc   = (int)$this->ReadPropertyInteger('BatteryMinSocForPV');
         if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
 
-        // --- STOP-Bedingung strikt ---
-        $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV, 1=Manuell, 2=Aus
+        // STOP
         if (!$connected || $targetW < $minTargetW) {
-            $targetFrc = ($mode === 2) ? 1 : 0; // Aus=hart sperren, sonst neutral warten
+            $targetFrc = 0; // neutral warten
             if ($frc !== $targetFrc) {
                 $this->sendSet('frc', (string)$targetFrc);
                 if ($vid=@$this->GetIDForIdent('FRC')) @SetValue($vid, $targetFrc);
-                $this->dbgLog('FRC', $targetFrc ? 'Stop (hart): kein PV/kein Auto' : 'Warten (neutral): kein PV/kein Auto');
             }
             return;
         }
 
-        // --- START nur wenn OK ---
+        // START
         if ($frc !== 2 && ($nowMs - $lastPub) >= $gapMs) {
-            [$pm,$a] = $this->targetPhaseAmp($targetW);
-            $this->sendSet('psm', ($pm===3) ? '2' : '1');
+            [$pm,$a] = $this->targetPhaseAmp($targetW);          // pm: 1|3
+            $this->sendSet('psm', ($pm===3) ? '2' : '1');        // WB: '1'|'2'
             $this->setCurrentLimitA($a);
             $this->sendSet('frc', '2');
             if ($vidA=@$this->GetIDForIdent('Ampere_A')) @SetValue($vidA, $a);
@@ -512,9 +553,9 @@ public function Create()
             $holdMs = (int)$this->ReadPropertyInteger('MinHoldAfterPhaseMs');
             $lastSw = (int)$this->ReadAttributeInteger('LastPhaseSwitchMs');
             if ($nowMs - $lastSw >= $holdMs) {
-                $pmCur = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')) ?: 1;
-                $p3 = (int)$this->ReadAttributeInteger('Phase_Above3pMs');
-                $p1 = (int)$this->ReadAttributeInteger('Phase_Below1pMs');
+                $pmCur = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')) ?: 1; // 1|3 (UI)
+                $p3    = (int)$this->ReadAttributeInteger('Phase_Above3pMs');
+                $p1    = (int)$this->ReadAttributeInteger('Phase_Below1pMs');
                 $need3 = max(1,(int)$this->ReadPropertyInteger('To3pCycles')) * 1000;
                 $need1 = max(1,(int)$this->ReadPropertyInteger('To1pCycles')) * 1000;
 
@@ -522,7 +563,7 @@ public function Create()
                     $this->sendSet('psm', '2'); if ($vidPM=@$this->GetIDForIdent('Phasenmodus')) @SetValue($vidPM,3);
                     $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
                     $this->WriteAttributeInteger('LastCarState', $car);
-                    return; // im selben Tick kein Ampere-Step
+                    return;
                 }
                 if ($pmCur === 3 && $p1 >= $need1) {
                     $this->sendSet('psm', '1'); if ($vidPM=@$this->GetIDForIdent('Phasenmodus')) @SetValue($vidPM,1);
@@ -533,7 +574,7 @@ public function Create()
             }
         }
 
-        // Feinregelung um Ziel-A aus aktueller Ziel-W
+        // Feinregelung
         [$pmNow,$aNow] = $this->targetPhaseAmp($targetW);
         $minA = (int)$this->ReadPropertyInteger('MinAmp');
         $maxA = (int)$this->ReadPropertyInteger('MaxAmp');

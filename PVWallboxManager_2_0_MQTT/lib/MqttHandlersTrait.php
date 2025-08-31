@@ -61,10 +61,10 @@ trait MqttHandlersTrait
                 break;
             }
 
-            case 'psm':     // 1 = 1-phasig, 2 = 3-phasig  → UI: 1 | 3
+            case 'psm':
             {
-                $raw = trim($payload, "\" \t\n\r\0\x0B");
-                $new = ((string)$raw === '2' || (int)$raw === 2) ? 3 : 1;
+                $raw = trim($payload);
+                $new = ((string)$raw === '2' || (int)$raw === 2) ? 3 : 1; // UI 1|3
                 $old = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus'));
                 if ($old !== $new) {
                     $this->SetValueSafe('Phasenmodus', $new);
