@@ -304,103 +304,101 @@ public function Create()
         $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV,1=Manuell,2=Aus
         $U    = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
 
-        // ===== Manuell (fix): Anzeige aus UI-Werten =====
+        // ===== Manuell (fix): Zieltext + reale/geschätzte WB-Leistung setzen =====
         if ($mode === 1) {
-            $pmRaw  = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1|3
-            $nPhase = ($pmRaw === 3) ? 3 : 1;
+            $pmUi   = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1|3
+            $nPhase = ($pmUi === 3) ? 3 : 1;
             $aSel   = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
-            $wSet   = (int)round($aSel * $U * $nPhase);
-            $txt    = sprintf('%s · %d A · ≈ %.1f kW',
-                            ($nPhase===3?'3-phasig':'1-phasig'), $aSel, $wSet/1000.0);
+
+            // NRG bevorzugen, sonst A*U*Phasen schätzen wenn FRC=2
+            $wbW = 0;
+            $nrg = $this->mqttBufGet('nrg', null);
+            if (is_string($nrg)) { $t = @json_decode($nrg, true); if (is_array($t)) $nrg = $t; }
+            if (is_array($nrg) && array_key_exists(11, $nrg) && is_numeric($nrg[11])) {
+                $wbW = (int)round(max(0.0, (float)$nrg[11]));
+            } else {
+                if ((int)@GetValue(@$this->GetIDForIdent('FRC')) === 2 && $aSel > 0) {
+                    $wbW = (int)round($aSel * $U * $nPhase);
+                }
+            }
+            $this->SetValueSafe('PowerToCar_W', $wbW); // triggert HausNet-Recalc
+
+            $txt = sprintf('%s · %d A · ≈ %.1f kW',
+                        ($nPhase===3?'3-phasig':'1-phasig'), $aSel, ($aSel*$U*$nPhase)/1000.0);
             $this->SetValueSafe('Regelziel', $txt);
             return;
         }
 
-        // ===== PV-Automatik: Eingänge =====
+        // ===== PV-Automatik =====
         $pv = (int)round((float)$this->readVarWUnit('VarPV_ID','VarPV_Unit'));
 
-        // Batterie: nur Laden als Verbrauch
         $batt = (int)round((float)$this->readVarWUnit('VarBattery_ID','VarBattery_Unit'));
         if (!$this->ReadPropertyBoolean('BatteryPositiveIsCharge')) { $batt = -$batt; }
         $battCharge = max(0, $batt);
 
-        // Haus gesamt (inkl. WB)
         $houseTotal = (int)round((float)$this->readVarWUnit('VarHouse_ID','VarHouse_Unit'));
 
-        // NRG-Buffer frisch parsen (falls vorhanden)
         $nrgBuf = $this->mqttBufGet('nrg', null);
         if ($nrgBuf !== null && method_exists($this, 'parseAndStoreNRG')) {
             try { $this->parseAndStoreNRG($nrgBuf); } catch (\Throwable $e) {}
         }
 
-        // Status / Netz
-        $pm    = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p, 3=3p
+        $pmUi = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1|3
         $phEff = (int)$this->ReadAttributeInteger('WB_ActivePhases');
-        if ($phEff < 1 || $phEff > 3) { $phEff = ($pm===3) ? 3 : 1; }
+        if ($phEff < 1 || $phEff > 3) { $phEff = ($pmUi===3) ? 3 : 1; }
 
-        // Laden aktiv?
-        $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));      // 2 = Start
-        $car = (int)@GetValue(@$this->GetIDForIdent('CarState')); // 2 = lädt
-        $charging = ($frc === 2) && ($car === 2);
+        $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));
+        $car = (int)@GetValue(@$this->GetIDForIdent('CarState'));
 
-        // WB-Leistung
+        // WB-Leistung: NRG bevorzugen, sonst aus Ampere schätzen wenn FRC=2
         $wbW = 0;
-        if ($charging) {
-            $nrg = $this->mqttBufGet('nrg', null);
-            if (is_string($nrg)) { $t = @json_decode($nrg, true); if (is_array($t)) $nrg = $t; }
-            if (is_array($nrg) && array_key_exists(11, $nrg) && is_numeric($nrg[11])) {
-                $wbW = (int)round(max(0.0, (float)$nrg[11]));
-            }
-            if ($wbW <= 0) {
+        $nrg = $this->mqttBufGet('nrg', null);
+        if (is_string($nrg)) { $t = @json_decode($nrg, true); if (is_array($t)) $nrg = $t; }
+        if (is_array($nrg) && array_key_exists(11, $nrg) && is_numeric($nrg[11])) {
+            $wbW = (int)round(max(0.0, (float)$nrg[11]));
+        } else {
+            if ($frc === 2) {
                 $ampLive = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
-                $wbW = (int)round($ampLive * $U * max(1, $phEff));
+                if ($ampLive > 0) $wbW = (int)round($ampLive * $U * max(1,$phEff));
             }
         }
         $this->SetValueSafe('PowerToCar_W', $wbW);
 
-        // Reserve + SoC lesen
+        // Reserve + SoC
         $reserveW = (int)$this->ReadPropertyInteger('BatteryReserveW');
         $batSocID = (int)$this->ReadPropertyInteger('VarBatterySoc_ID');
         $batSoc   = ($batSocID>0 && @IPS_VariableExists($batSocID)) ? (float)@GetValue($batSocID) : -1.0;
         $minSoc   = (int)$this->ReadPropertyInteger('BatteryMinSocForPV');
 
-        // Auto verbunden?
         $connected = in_array($car, [2,3,4], true);
-
-        // Batterieabzug nur wenn kein Auto ODER SoC < Mindest-SoC
         $battForCalc = ($connected && $batSoc >= 0 && $batSoc >= $minSoc) ? 0 : $battCharge;
 
-        // Überschuss: PV − Batt(ggf.) − Haus + WB
         $surplusRaw = max(0, $pv - $battForCalc - $houseTotal + $wbW);
 
-        // Glättung (EMA)
         $alpha   = min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0));
         $emaPrev = (int)$this->ReadAttributeInteger('SlowSurplusW');
         $ema     = (int)round($alpha * $surplusRaw + (1.0 - $alpha) * $emaPrev);
         $this->WriteAttributeInteger('SlowSurplusW', $ema);
         $this->WriteAttributeInteger('Slow_SurplusRaw', $surplusRaw);
 
-        // Zielleistung
         $targetW = max(0, $ema - max(0, $reserveW));
         if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
         $this->WriteAttributeInteger('Slow_TargetW', (int)$targetW);
 
-        // Mindestziel
         $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW');
         if ($targetW < $minTargetW) { $targetW = 0; }
 
-        // Ziel (Phasen/A) für Anzeige
         [$pmCalc,$aCalc] = $this->targetPhaseAmp((int)$targetW);
         $nPhase = ($pmCalc === 3) ? 3 : 1;
         $phaseTxt = ($nPhase === 3) ? '3-phasig' : '1-phasig';
-        $wSet     = (int)round(max(0,$aCalc) * $U * $nPhase); // Setpoint-Leistung
+        $wSet     = (int)round(max(0,$aCalc) * $U * $nPhase);
         $txt      = sprintf('%s · %d A · ≈ %.1f kW (PV-Ziel %.1f kW)',
                             $phaseTxt, max(0,$aCalc), $wSet/1000.0, max(0,$targetW)/1000.0);
 
         $this->SetValueSafe('Regelziel', $txt);
         $this->WriteAttributeInteger('Slow_LastCalcA', max(0,$aCalc));
 
-        // Start/Stop & Phasenhist
+        // Hysteresezähler
         $startW = (int)$this->ReadPropertyInteger('StartThresholdW');
         $stopW  = (int)$this->ReadPropertyInteger('StopThresholdW');
         $above  = (int)$this->ReadAttributeInteger('Slow_AboveStartMs');
