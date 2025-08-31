@@ -143,6 +143,9 @@ public function Create()
     $this->RegisterAttributeInteger('Phase_Above3pMs', 0);
     $this->RegisterAttributeInteger('Phase_Below1pMs', 0);
 
+    $this->RegisterAttributeInteger('PendingPhaseMode', 0);   // 0=none, 1|3 Ziel
+    $this->RegisterAttributeInteger('PhaseSwitchState', 0);   // 0 idle,1 stop,2 set,3 start
+
     // --- Timer ---
     $this->RegisterTimer('LOOP', 0, $this->modulePrefix().'_Loop($_IPS["TARGET"]);');
     $this->RegisterTimer('SLOW_TickUI', 0, 'IPS_RequestAction($_IPS["TARGET"], "DoSlowTickUI", 0);');
@@ -263,15 +266,20 @@ public function Create()
                 if ($pm === $old) return;
 
                 $this->SetValueSafe('Phasenmodus', $pm);
-                $this->sendSet('psm', ($pm === 3) ? '2' : '1');
 
                 if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 1) { // Manuell
                     $connected = in_array((int)@GetValue(@$this->GetIDForIdent('CarState')), [2,3,4], true);
-                    if ($connected && (int)@GetValue(@$this->GetIDForIdent('FRC')) !== 2) {
-                        $this->sendSet('frc','2'); @SetValue(@$this->GetIDForIdent('FRC'),2);
+                    if ($connected && (int)@GetValue(@$this->GetIDForIdent('FRC')) === 2) {
+                        // Sequenz im Timer ausführen
+                        $this->WriteAttributeInteger('PendingPhaseMode', $pm);
+                        $this->WriteAttributeInteger('PhaseSwitchState', 0);
+                        $this->WriteAttributeInteger('LastPhaseSwitchMs', (int)(microtime(true)*1000));
+                        return;
                     }
                 }
 
+                // Kein Ladevorgang → direkt setzen
+                $this->sendSet('psm', ($pm === 3) ? '2' : '1');
                 $nowMs = (int)(microtime(true)*1000);
                 $this->WriteAttributeInteger('LastPhaseMode', $pm);
                 $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
@@ -296,18 +304,19 @@ public function Create()
         $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV,1=Manuell,2=Aus
         $U    = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
 
-        if ($mode === 1) { // Manuell
-            $pmRaw = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1/2
-            $nPhase = ($pmRaw===2) ? 3 : 1;
+        // ===== Manuell (fix): Anzeige aus UI-Werten =====
+        if ($mode === 1) {
+            $pmRaw  = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1|3
+            $nPhase = ($pmRaw === 3) ? 3 : 1;
             $aSel   = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
-            $wCalc  = (int)round($aSel * $U * $nPhase);
+            $wSet   = (int)round($aSel * $U * $nPhase);
             $txt    = sprintf('%s · %d A · ≈ %.1f kW',
-                        ($nPhase===3?'3-phasig':'1-phasig'), $aSel, $wCalc/1000.0);
+                            ($nPhase===3?'3-phasig':'1-phasig'), $aSel, $wSet/1000.0);
             $this->SetValueSafe('Regelziel', $txt);
             return;
         }
 
-        // Eingänge
+        // ===== PV-Automatik: Eingänge =====
         $pv = (int)round((float)$this->readVarWUnit('VarPV_ID','VarPV_Unit'));
 
         // Batterie: nur Laden als Verbrauch
@@ -328,7 +337,6 @@ public function Create()
         $pm    = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p, 3=3p
         $phEff = (int)$this->ReadAttributeInteger('WB_ActivePhases');
         if ($phEff < 1 || $phEff > 3) { $phEff = ($pm===3) ? 3 : 1; }
-        $U     = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
 
         // Laden aktiv?
         $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));      // 2 = Start
@@ -350,51 +358,44 @@ public function Create()
         }
         $this->SetValueSafe('PowerToCar_W', $wbW);
 
-// Reserve + SoC lesen
-$reserveW = (int)$this->ReadPropertyInteger('BatteryReserveW');
-$batSocID = (int)$this->ReadPropertyInteger('VarBatterySoc_ID');
-$batSoc   = ($batSocID>0 && @IPS_VariableExists($batSocID)) ? (float)@GetValue($batSocID) : -1.0;
-$minSoc   = (int)$this->ReadPropertyInteger('BatteryMinSocForPV');
+        // Reserve + SoC lesen
+        $reserveW = (int)$this->ReadPropertyInteger('BatteryReserveW');
+        $batSocID = (int)$this->ReadPropertyInteger('VarBatterySoc_ID');
+        $batSoc   = ($batSocID>0 && @IPS_VariableExists($batSocID)) ? (float)@GetValue($batSocID) : -1.0;
+        $minSoc   = (int)$this->ReadPropertyInteger('BatteryMinSocForPV');
 
-// Auto verbunden?
-$connected = in_array($car, [2,3,4], true);
+        // Auto verbunden?
+        $connected = in_array($car, [2,3,4], true);
 
-// Batterieabzug nur wenn kein Auto ODER SoC < Mindest-SoC
-$battForCalc = ($connected && $batSoc >= 0 && $batSoc >= $minSoc) ? 0 : $battCharge;
+        // Batterieabzug nur wenn kein Auto ODER SoC < Mindest-SoC
+        $battForCalc = ($connected && $batSoc >= 0 && $batSoc >= $minSoc) ? 0 : $battCharge;
 
-// --- Überschuss: PV − Batt(ggf.) − Haus + WB ---
-$surplusRaw = max(0, $pv - $battForCalc - $houseTotal + $wbW);
+        // Überschuss: PV − Batt(ggf.) − Haus + WB
+        $surplusRaw = max(0, $pv - $battForCalc - $houseTotal + $wbW);
 
-// Glättung (EMA)
-$alpha   = min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0));
-$emaPrev = (int)$this->ReadAttributeInteger('SlowSurplusW'); // definiert
-$ema     = (int)round($alpha * $surplusRaw + (1.0 - $alpha) * $emaPrev);
-$this->WriteAttributeInteger('SlowSurplusW', $ema);
-$this->WriteAttributeInteger('Slow_SurplusRaw', $surplusRaw);
+        // Glättung (EMA)
+        $alpha   = min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0));
+        $emaPrev = (int)$this->ReadAttributeInteger('SlowSurplusW');
+        $ema     = (int)round($alpha * $surplusRaw + (1.0 - $alpha) * $emaPrev);
+        $this->WriteAttributeInteger('SlowSurplusW', $ema);
+        $this->WriteAttributeInteger('Slow_SurplusRaw', $surplusRaw);
 
-// Zielleistung
-$targetW = max(0, $ema - max(0, $reserveW));
-if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
-$this->WriteAttributeInteger('Slow_TargetW', (int)$targetW);
+        // Zielleistung
+        $targetW = max(0, $ema - max(0, $reserveW));
+        if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
+        $this->WriteAttributeInteger('Slow_TargetW', (int)$targetW);
 
-        // Mindestziel ohne Elvis
+        // Mindestziel
         $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW');
         if ($targetW < $minTargetW) { $targetW = 0; }
 
         // Ziel (Phasen/A) für Anzeige
-        [$pmCalc,$aCalc,$txt] = $this->targetPhaseAmp((int)$targetW);
-        // Immer eigenen Text mit Leistung bauen
-        $U      = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
+        [$pmCalc,$aCalc] = $this->targetPhaseAmp((int)$targetW);
         $nPhase = ($pmCalc === 3) ? 3 : 1;
-
-        // Wenn $targetW>0, das verwenden. Sonst aus A·U·Phasen abschätzen.
-        $wCalc  = (int)round(($targetW > 0) ? $targetW : ($aCalc * $U * $nPhase));
-
-        // Format "1-phasig · 6 A · ≈ 1,4 kW"
         $phaseTxt = ($nPhase === 3) ? '3-phasig' : '1-phasig';
         $wSet     = (int)round(max(0,$aCalc) * $U * $nPhase); // Setpoint-Leistung
         $txt      = sprintf('%s · %d A · ≈ %.1f kW (PV-Ziel %.1f kW)',
-                           $phaseTxt, max(0,$aCalc), $wSet/1000.0, max(0,$targetW)/1000.0);
+                            $phaseTxt, max(0,$aCalc), $wSet/1000.0, max(0,$targetW)/1000.0);
 
         $this->SetValueSafe('Regelziel', $txt);
         $this->WriteAttributeInteger('Slow_LastCalcA', max(0,$aCalc));
@@ -419,8 +420,8 @@ $this->WriteAttributeInteger('Slow_TargetW', (int)$targetW);
         $this->WriteAttributeInteger('Phase_Below1pMs', $p1);
 
         // Debug
-        $fmtW = static function ($w): string { return number_format((int)round($w), 0, ',', '.') . ' W'; };
-        $fmtA = static function ($a): string { return number_format((int)round($a), 0, ',', '.') . ' A'; };
+        $fmtW  = static fn ($w): string => number_format((int)round($w), 0, ',', '.') . ' W';
+        $fmtA  = static fn ($a): string => number_format((int)round($a), 0, ',', '.') . ' A';
         $phTxt = (max(1, $phEff) === 3) ? '3p' : '1p';
         $this->dbgLog('PV-Überschuss', sprintf(
             'PV=%s - Batt(Laden)=%s - Haus=%s + WB=%s ⇒ Roh=%s | EMA=%s (α=%.2f) | Reserve=%s | Ziel=%s, ZielA=%s @ %d V · %s | SoC=%s%% (min %d%%)',
