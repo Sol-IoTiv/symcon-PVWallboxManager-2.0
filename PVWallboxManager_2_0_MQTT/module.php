@@ -232,17 +232,46 @@ public function Create()
                 $this->SetValueSafe('Mode', in_array((int)$Value,[0,1,2],true)?(int)$Value:0);
                 return;
 
-            case 'Ampere_A':
-                $this->setCurrentLimitA((int)$Value);
+            case 'Ampere_A': {
+                $a = (int)$Value;
+                $this->SetValueSafe('Ampere_A', $a);
+
+                if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 1) { // Manuell
+                    $minA = (int)$this->ReadPropertyInteger('MinAmp');
+                    $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
+                    $a    = min($maxA, max($minA, $a));
+
+                    $connected = in_array((int)@GetValue(@$this->GetIDForIdent('CarState')), [2,3,4], true);
+                    if ($connected) {
+                        $this->setCurrentLimitA($a);
+                        if ((int)@GetValue(@$this->GetIDForIdent('FRC')) !== 2) {
+                            $this->sendSet('frc','2'); @SetValue(@$this->GetIDForIdent('FRC'),2);
+                        }
+                        $nowMs = (int)(microtime(true)*1000);
+                        $this->WriteAttributeInteger('LastAmpSet',    $a);
+                        $this->WriteAttributeInteger('LastPublishMs', $nowMs);
+                    }
+                }
                 return;
+            }
 
             case 'Phasenmodus': {
-                if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 2) return;
+                if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 2) return; // Nur Anzeige
+
                 $pm  = ((int)$Value === 3) ? 3 : 1;
                 $old = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus'));
                 if ($pm === $old) return;
+
                 $this->SetValueSafe('Phasenmodus', $pm);
                 $this->sendSet('psm', ($pm === 3) ? '2' : '1');
+
+                if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 1) { // Manuell
+                    $connected = in_array((int)@GetValue(@$this->GetIDForIdent('CarState')), [2,3,4], true);
+                    if ($connected && (int)@GetValue(@$this->GetIDForIdent('FRC')) !== 2) {
+                        $this->sendSet('frc','2'); @SetValue(@$this->GetIDForIdent('FRC'),2);
+                    }
+                }
+
                 $nowMs = (int)(microtime(true)*1000);
                 $this->WriteAttributeInteger('LastPhaseMode', $pm);
                 $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
