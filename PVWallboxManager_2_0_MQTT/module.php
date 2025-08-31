@@ -264,6 +264,19 @@ public function Create()
     public function SLOW_TickUI(): void
     {
         $this->SetValueSafe('Uhrzeit', time());
+        $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV,1=Manuell,2=Aus
+        $U    = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
+
+        if ($mode === 1) { // Manuell
+            $pmRaw = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1/2
+            $nPhase = ($pmRaw===2) ? 3 : 1;
+            $aSel   = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
+            $wCalc  = (int)round($aSel * $U * $nPhase);
+            $txt    = sprintf('%s · %d A · ≈ %.1f kW',
+                        ($nPhase===3?'3-phasig':'1-phasig'), $aSel, $wCalc/1000.0);
+            $this->SetValueSafe('Regelziel', $txt);
+            return;
+        }
 
         // Eingänge
         $pv = (int)round((float)$this->readVarWUnit('VarPV_ID','VarPV_Unit'));
@@ -392,24 +405,49 @@ $this->WriteAttributeInteger('Slow_TargetW', (int)$targetW);
     public function SLOW_TickControl(): void
     {
         if (!$this->ReadPropertyBoolean('SlowControlEnabled')) return;
-        if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 2) return;
+
+        $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV, 1=Manuell, 2=Aus
+        if ($mode === 2) return; // Aus
 
         $nowMs   = (int)(microtime(true)*1000);
         $gapMs   = (int)$this->ReadPropertyInteger('MinPublishGapMs');
         $lastPub = (int)$this->ReadAttributeInteger('LastPublishMs');
+        $frc     = (int)@GetValue(@$this->GetIDForIdent('FRC'));
+        $car     = (int)@GetValue(@$this->GetIDForIdent('CarState'));
+        $connected = in_array($car, [2,3,4], true);
 
+        // --- MANUELL (fix): keine SoC-/Reserve-/Schwellwerte, direkt setzen ---
+        if ($mode === 1) {
+            if (!$connected) { // neutral warten
+                if ($frc !== 0) { $this->sendSet('frc','0'); @SetValue(@$this->GetIDForIdent('FRC'),0); }
+                return;
+            }
+            if (($nowMs - $lastPub) < $gapMs) return;
+
+            $pmRaw = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p, 2=3p (MQTT)
+            $pm    = ($pmRaw === 2) ? 3 : 1;
+            $minA  = (int)$this->ReadPropertyInteger('MinAmp');
+            $maxA  = (int)$this->ReadPropertyInteger('MaxAmp');
+            $aSel  = min($maxA, max($minA, (int)@GetValue(@$this->GetIDForIdent('Ampere_A'))));
+
+            $this->sendSet('psm', ($pm===3) ? '2' : '1');
+            $this->setCurrentLimitA($aSel);
+            if ($frc !== 2) $this->sendSet('frc','2');
+            if ($vidA=@$this->GetIDForIdent('Ampere_A')) @SetValue($vidA, $aSel);
+            $this->WriteAttributeInteger('LastAmpSet',    $aSel);
+            $this->WriteAttributeInteger('LastPublishMs', $nowMs);
+            return;
+        }
+
+        // --- PV-AUTOMATIK: (SoC-Gurt hier lassen) ---
         $targetW = (int)$this->ReadAttributeInteger('Slow_TargetW');
-        $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW'); // kein Elvis
+        $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW');
 
-        // Batterie-SoC prüfen (Sicherheitsgurt)
+        // SoC-Gurt nur im PV-Modus
         $batSocID = (int)$this->ReadPropertyInteger('VarBatterySoc_ID');
         $batSoc   = ($batSocID>0 && @IPS_VariableExists($batSocID)) ? (float)@GetValue($batSocID) : -1.0;
         $minSoc   = (int)$this->ReadPropertyInteger('BatteryMinSocForPV');
         if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
-
-        $car = (int)@GetValue(@$this->GetIDForIdent('CarState'));
-        $connected = in_array($car, [2,3,4], true);
-        $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));
 
         // --- STOP-Bedingung strikt ---
         $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV, 1=Manuell, 2=Aus
