@@ -61,15 +61,13 @@ trait MqttHandlersTrait
                 break;
             }
 
-            case 'psm':
-            {
+            case 'psm': {
                 $raw = trim($payload);
-                $new = ((string)$raw === '2' || (int)$raw === 2) ? 3 : 1; // UI 1|3
-                $old = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus'));
-                if ($old !== $new) {
-                    $this->SetValueSafe('Phasenmodus', $new);
-                    $this->WriteAttributeInteger('WB_ActivePhases', $new);
-                    $this->dbgChanged('Phasenmodus @'.$topic, $this->phaseModeLabel($old), $this->phaseModeLabel($new));
+                $newUi = ((string)$raw === '2' || (int)$raw === 2) ? 3 : 1; // UI: 1|3
+                $oldUi = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus'));
+                if ($oldUi !== $newUi) {
+                    $this->SetValueSafe('Phasenmodus', $newUi);
+                    $this->dbgChanged('Phasenmodus @'.$topic, $this->phaseModeLabel($oldUi), $this->phaseModeLabel($newUi));
                 }
                 break;
             }
@@ -140,7 +138,7 @@ trait MqttHandlersTrait
 
     private function parseAndStoreNRG(string $payload): void
     {
-        // nrg: U(L1,L2,L3,N)[0..3], I(L1,L2,L3)[4..6], P(L1,L2,L3,N,Total)[7..11], pf(L1..)[12..15]
+        // nrg: U(L1..N)[0..3], I(L1..L3)[4..6], P(L1..Total)[7..11], pf(L1..N)[12..15]
         $p = trim($payload, "\" \t\n\r\0\x0B");
         $arr = ($p !== '' && $p[0] === '[') ? @json_decode($p, true) : null;
         if (!is_array($arr)) {
@@ -149,42 +147,40 @@ trait MqttHandlersTrait
         }
         if (!is_array($arr)) return;
 
-        // Effektive Phasen bestimmen
-        $U           = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
-        $pmDeclared  = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1=1p, 3=3p
-        $phDeclared  = ($pmDeclared === 3) ? 3 : 1;
-        $I_THRESH_A  = 1.0;
+        // Gesamtleistung (optional)
+        if (isset($arr[11]) && is_numeric($arr[11])) {
+            $ptotal = (int)round((float)$arr[11]);
+            if ($vid = @$this->GetIDForIdent('PowerToCar_W')) @SetValue($vid, max(0,$ptotal));
+        }
+
+        $U = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
+        $I_THRESH_A = 5.0;                                // Phase gilt als aktiv ab ≥ 5 A
+        $P_THRESH_W = (int)round($U * $I_THRESH_A * 0.85); // ~980 W bei 230 V
 
         $i1 = $arr[4] ?? null;  $i2 = $arr[5] ?? null;  $i3 = $arr[6] ?? null;
         $p1 = $arr[7] ?? null;  $p2 = $arr[8] ?? null;  $p3 = $arr[9] ?? null;
 
-        $phEff = 0; $via = 'declared';
+        $phEff = 0; $via = 'none';
 
-        // 1) Über Strom
+        // 1) Über Stromstärke pro Phase
         if ($i1 !== null && $i2 !== null && $i3 !== null) {
             $phEff = (int)((float)$i1 >= $I_THRESH_A) + (int)((float)$i2 >= $I_THRESH_A) + (int)((float)$i3 >= $I_THRESH_A);
-            if ($phEff > 0) $via = 'I>=1A';
+            if ($phEff > 0) $via = 'I>=5A';
         }
 
         // 2) Fallback über Leistung je Phase
         if ($phEff === 0 && $p1 !== null && $p2 !== null && $p3 !== null) {
-            $thW = (int)round($U * $I_THRESH_A * 0.9); // ~207 W bei 230 V
-            $phEff = (int)((float)$p1 >= $thW) + (int)((float)$p2 >= $thW) + (int)((float)$p3 >= $thW);
-            if ($phEff > 0) $via = 'P≈U*1A';
+            $phEff = (int)((float)$p1 >= $P_THRESH_W) + (int)((float)$p2 >= $P_THRESH_W) + (int)((float)$p3 >= $P_THRESH_W);
+            if ($phEff > 0) $via = 'P≈U*I';
         }
 
-        if ($phEff <= 0) $phEff = $phDeclared;
-        if ($phDeclared === 1) $phEff = 1; // Kontaktor 1p begrenzt
-        $phEff = min(3, max(1, $phEff));
+        // Fallback: mindestens 1
+        if ($phEff < 1 || $phEff > 3) $phEff = 1;
 
         $this->WriteAttributeInteger('WB_ActivePhases', $phEff);
         $this->dbgLog('NRG→Phasen', sprintf(
-            'phEff=%d via=%s | I1=%.2fA I2=%.2fA I3=%.2fA | P1=%.1fW P2=%.1fW P3=%.1fW',
-            $phEff, $via,
-            (float)$i1, (float)$i2, (float)$i3,
-            (float)$p1, (float)$p2, (float)$p3
+            'eff=%d via=%s | I=[%.2f, %.2f, %.2f] A | P=[%.0f, %.0f, %.0f] W',
+            $phEff, $via, (float)$i1, (float)$i2, (float)$i3, (float)$p1, (float)$p2, (float)$p3
         ));
-
-        // KEIN Setzen von Leistungs-Variablen hier. PowerToCar_W wird in SLOW_TickUI berechnet.
     }
 }

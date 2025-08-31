@@ -307,25 +307,24 @@ public function Create()
         // ===== Manuell (fix): Zieltext + reale/geschätzte WB-Leistung setzen =====
         if ($mode === 1) {
             $pmUi   = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1|3
-            $nPhase = ($pmUi === 3) ? 3 : 1;
             $aSel   = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
+            $effPh  = (int)$this->ReadAttributeInteger('WB_ActivePhases');
+            if ($effPh < 1 || $effPh > 3) $effPh = ($pmUi === 3) ? 3 : 1;   // Fallback
 
-            // NRG bevorzugen, sonst A*U*Phasen schätzen wenn FRC=2
+            // NRG bevorzugen, sonst A*U*effPh schätzen
             $wbW = 0;
             $nrg = $this->mqttBufGet('nrg', null);
             if (is_string($nrg)) { $t = @json_decode($nrg, true); if (is_array($t)) $nrg = $t; }
             if (is_array($nrg) && array_key_exists(11, $nrg) && is_numeric($nrg[11])) {
                 $wbW = (int)round(max(0.0, (float)$nrg[11]));
-            } else {
-                if ((int)@GetValue(@$this->GetIDForIdent('FRC')) === 2 && $aSel > 0) {
-                    $wbW = (int)round($aSel * $U * $nPhase);
-                }
+            } elseif ((int)@GetValue(@$this->GetIDForIdent('FRC')) === 2 && $aSel > 0) {
+                $wbW = (int)round($aSel * $U * $effPh);
             }
-            $this->SetValueSafe('PowerToCar_W', $wbW); // triggert HausNet-Recalc
+            $this->SetValueSafe('PowerToCar_W', $wbW);
 
-            $txt = sprintf('%s · %d A · ≈ %.1f kW',
-                        ($nPhase===3?'3-phasig':'1-phasig'), $aSel, ($aSel*$U*$nPhase)/1000.0);
-            $this->SetValueSafe('Regelziel', $txt);
+            $phaseTxt = ($effPh===3 ? '3-phasig' : ($effPh===2 ? '2-phasig' : '1-phasig'));
+            $wSet     = (int)round($aSel * $U * $effPh);
+            $this->SetValueSafe('Regelziel', sprintf('%s · %d A · ≈ %.1f kW', $phaseTxt, $aSel, $wSet/1000.0));
             return;
         }
 
@@ -389,11 +388,16 @@ public function Create()
         if ($targetW < $minTargetW) { $targetW = 0; }
 
         [$pmCalc,$aCalc] = $this->targetPhaseAmp((int)$targetW);
-        $nPhase = ($pmCalc === 3) ? 3 : 1;
-        $phaseTxt = ($nPhase === 3) ? '3-phasig' : '1-phasig';
-        $wSet     = (int)round(max(0,$aCalc) * $U * $nPhase);
-        $txt      = sprintf('%s · %d A · ≈ %.1f kW (PV-Ziel %.1f kW)',
-                            $phaseTxt, max(0,$aCalc), $wSet/1000.0, max(0,$targetW)/1000.0);
+
+        // Für Anzeige: wenn wirklich am Laden (FRC==2) -> effektive Phasen, sonst Plan (pmCalc)
+        $dispPh = ((int)@GetValue(@$this->GetIDForIdent('FRC')) === 2) ? $effPh : (($pmCalc===3)?3:1);
+        $phaseTxt = ($dispPh===3?'3-phasig':($dispPh===2?'2-phasig':'1-phasig'));
+        $wSet     = (int)round(max(0,$aCalc) * $U * $dispPh);
+
+        $this->SetValueSafe('Regelziel', sprintf(
+            '%s · %d A · ≈ %.1f kW (PV-Ziel %.1f kW)',
+            $phaseTxt, max(0,$aCalc), $wSet/1000.0, max(0,$targetW)/1000.0
+        ));
 
         $this->SetValueSafe('Regelziel', $txt);
         $this->WriteAttributeInteger('Slow_LastCalcA', max(0,$aCalc));
