@@ -293,4 +293,10 @@ trait Helpers
         $this->SetValueSafe('Regelziel', $txt);
     }
 
+    private function fmtKW($w): string
+    {
+        return number_format(max(0,$w)/1000, 1, ',', '.');
+    }
+
+
 }

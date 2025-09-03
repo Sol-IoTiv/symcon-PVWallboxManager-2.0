@@ -302,6 +302,9 @@ public function Create()
     {
         $this->SetValueSafe('Uhrzeit', time());
 
+        // lokale Formatter
+        $fmtKW = static fn($w) => number_format(max(0, (int)$w) / 1000, 1, ',', '.');
+
         // NRG immer auswerten (Phasen & P_total)
         $nrgBuf = $this->mqttBufGet('nrg', null);
         if ($nrgBuf !== null && method_exists($this, 'parseAndStoreNRG')) {
@@ -311,27 +314,31 @@ public function Create()
         $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV,1=Manuell,2=Aus
         $U    = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
 
-        // ===== MANUELL (fix) =====
+        // ===== MANUELL (fix): Zieltext + reale/geschätzte WB-Leistung setzen =====
         if ($mode === 1) {
             $pmUi  = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1|3
             $aSel  = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
-            $phEff = (int)$this->ReadAttributeInteger('WB_ActivePhases');
-            if ($phEff < 1 || $phEff > 3) $phEff = ($pmUi===3) ? 3 : 1;
+            $effPh = (int)$this->ReadAttributeInteger('WB_ActivePhases');
+            if ($effPh < 1 || $effPh > 3) $effPh = ($pmUi === 3) ? 3 : 1;
 
-            // Ladeleistung: NRG bevorzugen
+            // reale WB-Leistung bevorzugen
             $wbW = 0;
             $nrg = $this->mqttBufGet('nrg', null);
             if (is_string($nrg)) { $t = @json_decode($nrg, true); if (is_array($t)) $nrg = $t; }
             if (is_array($nrg) && isset($nrg[11]) && is_numeric($nrg[11])) {
                 $wbW = (int)round(max(0.0, (float)$nrg[11]));
             } elseif ((int)@GetValue(@$this->GetIDForIdent('FRC')) === 2 && $aSel > 0) {
-                $wbW = (int)round($aSel * $U * $phEff);
+                $wbW = (int)round($aSel * $U * $effPh);
             }
             $this->SetValueSafe('PowerToCar_W', $wbW);
 
-            $phaseTxt = ($phEff===3?'3-phasig':($phEff===2?'2-phasig':'1-phasig'));
-            $wSet     = (int)round($aSel * $U * $phEff);
-            $this->SetValueSafe('Regelziel', sprintf('%s · %d A · ≈ %.1f kW', $phaseTxt, $aSel, $wSet/1000.0));
+            $phaseTxt = ($effPh===3 ? '3-phasig' : ($effPh===2 ? '2-phasig' : '1-phasig'));
+            $wSet     = (int)round($aSel * $U * $effPh);
+
+            $this->SetValueSafe(
+                'Regelziel',
+                sprintf('Manuell · %s · %d A ≈ %s kW', $phaseTxt, $aSel, $fmtKW($wSet))
+            );
             return;
         }
 
@@ -401,10 +408,11 @@ public function Create()
         $phaseTxt = ($dispPh===3?'3-phasig':($dispPh===2?'2-phasig':'1-phasig'));
         $wSet     = (int)round(max(0,$aCalc) * $U * $dispPh);
 
-        $this->SetValueSafe('Regelziel', sprintf(
-            '%s · %d A · ≈ %.1f kW (PV-Ziel %.1f kW)',
-            $phaseTxt, max(0,$aCalc), $wSet/1000.0, max(0,$targetW)/1000.0
-        ));
+        $this->SetValueSafe(
+            'Regelziel',
+            sprintf('%s · %d A · ≈ %s kW (PV-Ziel %s kW)',
+                $phaseTxt, max(0,$aCalc), $fmtKW($wSet), $fmtKW($targetW))
+        );
         $this->WriteAttributeInteger('Slow_LastCalcA', max(0,$aCalc));
 
         // Hysteresezähler
@@ -426,12 +434,12 @@ public function Create()
         // Debug
         $fmtW = static fn($w)=>number_format((int)round($w),0,',','.') . ' W';
         $fmtA = static fn($a)=>number_format((int)round($a),0,',','.') . ' A';
-        $phTxt = ($phEff===3?'3p':($phEff===2?'2p':'1p'));
+        $phDbg = ($phEff===3?'3p':($phEff===2?'2p':'1p'));
         $this->dbgLog('PV-Überschuss', sprintf(
             'PV=%s - Batt(Laden)=%s - Haus=%s + WB=%s ⇒ Roh=%s | EMA=%s (α=%.2f) | Reserve=%s | Ziel=%s, ZielA=%s @ %d V · %s | SoC=%s%% (min %d%%)',
             $fmtW($pv), $fmtW($battCharge), $fmtW($houseTotal), $fmtW($wbW),
             $fmtW($surplusRaw), $fmtW((int)$ema), (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0,
-            $fmtW($reserveW), $fmtW($targetW), $fmtA($aCalc), (int)$U, $phTxt,
+            $fmtW($reserveW), $fmtW($targetW), $fmtA($aCalc), (int)$U, $phDbg,
             ($batSoc>=0? (int)round($batSoc): -1), $minSoc
         ));
     }
