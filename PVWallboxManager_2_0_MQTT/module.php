@@ -538,15 +538,24 @@ public function Create()
 
         // START
         if ($frc !== 2 && ($nowMs - $lastPub) >= $gapMs) {
-            [$pm,$a] = $this->targetPhaseAmp($targetW);          // pm: 1|3
-            $this->sendSet('psm', ($pm===3) ? '2' : '1');        // WB: '1'|'2'
-            $this->setCurrentLimitA($a);
+            [$pmPlan, /*$aPlan*/] = $this->targetPhaseAmp($targetW); // pm: 1|3
+            $U         = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
+            $phEffAttr = (int)$this->ReadAttributeInteger('WB_ActivePhases');   // 1/2/3 (aus NRG)
+            $phForCalc = ($phEffAttr === 2) ? 2 : (($pmPlan === 3) ? 3 : 1);    // 2-phasig bevorzugen
+            $minA      = (int)$this->ReadPropertyInteger('MinAmp');
+            $maxA      = (int)$this->ReadPropertyInteger('MaxAmp');
+            $aStart    = (int)ceil($targetW / ($U * max(1,$phForCalc)));
+            $aStart    = min($maxA, max($minA, $aStart));
+            $psmWanted = ($phForCalc >= 2) ? '2' : '1';
+
+            $this->sendSet('psm', $psmWanted);
+            $this->setCurrentLimitA($aStart);
             $this->sendSet('frc', '2');
-            if ($vidA=@$this->GetIDForIdent('Ampere_A')) @SetValue($vidA, $a);
-            $this->WriteAttributeInteger('LastAmpSet',    $a);
+            if ($vidA=@$this->GetIDForIdent('Ampere_A')) @SetValue($vidA, $aStart);
+            $this->WriteAttributeInteger('LastAmpSet',    $aStart);
             $this->WriteAttributeInteger('LastPublishMs', $nowMs);
             return;
-        }
+        } // <-- fehlende Klammer war hier
 
         // FRC nicht frei / Timing nicht ok
         if ($frc !== 2 || ($nowMs - $lastPub) < $gapMs) { $this->WriteAttributeInteger('LastCarState', $car); return; }
@@ -578,20 +587,26 @@ public function Create()
             }
         }
 
-        // Feinregelung
-        [$pmNow,$aNow] = $this->targetPhaseAmp($targetW);
-        $minA = (int)$this->ReadPropertyInteger('MinAmp');
-        $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
-        $vidA = @$this->GetIDForIdent('Ampere_A');
-        $curA = $vidA ? (int)@GetValue($vidA) : (int)$this->ReadAttributeInteger('LastAmpSet');
+        // Feinregelung (2-Phasen aware)
+        [$pmNow, /*$aIgnore*/] = $this->targetPhaseAmp($targetW);
+        $U         = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
+        $phEffAttr = (int)$this->ReadAttributeInteger('WB_ActivePhases');       // 1/2/3
+        $phForCalc = ($phEffAttr === 2) ? 2 : (($pmNow === 3) ? 3 : 1);
+
+        $minA  = (int)$this->ReadPropertyInteger('MinAmp');
+        $maxA  = (int)$this->ReadPropertyInteger('MaxAmp');
+        $vidA  = @$this->GetIDForIdent('Ampere_A');
+        $curA  = $vidA ? (int)@GetValue($vidA) : (int)$this->ReadAttributeInteger('LastAmpSet');
         if ($curA <= 0) $curA = $minA;
 
-        $targetA = $aNow;
+        $targetA = (int)ceil($targetW / ($U * max(1,$phForCalc)));
+        $targetA = min($maxA, max($minA, $targetA));
         if ($targetA === $curA) { $this->WriteAttributeInteger('LastCarState', $car); return; }
 
         $step  = (int)$this->ReadPropertyInteger('RampStepA'); if ($step <= 0) $step = 1;
         $nextA = ($targetA > $curA) ? min($curA + $step, $maxA) : max($curA - $step, $minA);
 
+        $this->sendSet('psm', ($phForCalc >= 2) ? '2' : '1');  // 2-/3-phasig ⇒ '2'
         $this->sendSet('amp', (string)$nextA);
         if ($vidA) @SetValue($vidA, $nextA);
         $this->WriteAttributeInteger('LastAmpSet',    $nextA);
