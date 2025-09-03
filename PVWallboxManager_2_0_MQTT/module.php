@@ -302,26 +302,23 @@ public function Create()
     {
         $this->SetValueSafe('Uhrzeit', time());
 
-        // lokale Formatter
-        $fmtKW = static fn($w) => number_format(max(0, (int)$w) / 1000, 1, ',', '.');
-
         // NRG immer auswerten (Phasen & P_total)
         $nrgBuf = $this->mqttBufGet('nrg', null);
         if ($nrgBuf !== null && method_exists($this, 'parseAndStoreNRG')) {
             try { $this->parseAndStoreNRG($nrgBuf); } catch (\Throwable $e) {}
         }
 
-        $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV,1=Manuell,2=Aus
         $U    = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
+        $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV, 1=Manuell, 2=Nur Anzeige
 
-        // ===== MANUELL (fix): Zieltext + reale/geschätzte WB-Leistung setzen =====
+        // ===== MANUELL (fix): Zieltext + reale/geschätzte WB-Leistung =====
         if ($mode === 1) {
-            $pmUi  = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1|3
+            $pmUi  = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1|3 (UI)
             $aSel  = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
-            $effPh = (int)$this->ReadAttributeInteger('WB_ActivePhases');
+            $effPh = (int)$this->ReadAttributeInteger('WB_ActivePhases');   // 1|2|3 (aus NRG)
             if ($effPh < 1 || $effPh > 3) $effPh = ($pmUi === 3) ? 3 : 1;
 
-            // reale WB-Leistung bevorzugen
+            // reale WB-Leistung bevorzugt
             $wbW = 0;
             $nrg = $this->mqttBufGet('nrg', null);
             if (is_string($nrg)) { $t = @json_decode($nrg, true); if (is_array($t)) $nrg = $t; }
@@ -334,11 +331,7 @@ public function Create()
 
             $phaseTxt = ($effPh===3 ? '3-phasig' : ($effPh===2 ? '2-phasig' : '1-phasig'));
             $wSet     = (int)round($aSel * $U * $effPh);
-
-            $this->SetValueSafe(
-                'Regelziel',
-                sprintf('Manuell · %s · %d A ≈ %s kW', $phaseTxt, $aSel, $fmtKW($wSet))
-            );
+            $this->SetValueSafe('Regelziel', sprintf('Manuell · %s · %d A · ≈ %s kW', $phaseTxt, $aSel, $this->fmtKW($wSet)));
             return;
         }
 
@@ -354,12 +347,13 @@ public function Create()
         $houseTotal = (int)round((float)$this->readVarWUnit('VarHouse_ID','VarHouse_Unit'));
 
         // Status/Phasen
-        $pmUi  = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1|3
-        $phEff = (int)$this->ReadAttributeInteger('WB_ActivePhases');
+        $pmUi   = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1|3 (UI)
+        $phEff  = (int)$this->ReadAttributeInteger('WB_ActivePhases');   // 1|2|3 (aus NRG)
         if ($phEff < 1 || $phEff > 3) $phEff = ($pmUi===3) ? 3 : 1;
 
-        $frc = (int)@GetValue(@$this->GetIDForIdent('FRC'));
-        $car = (int)@GetValue(@$this->GetIDForIdent('CarState'));
+        $frc       = (int)@GetValue(@$this->GetIDForIdent('FRC'));
+        $car       = (int)@GetValue(@$this->GetIDForIdent('CarState'));
+        $charging  = ($frc === 2) && ($car === 2);
 
         // Ladeleistung WB (NRG bevorzugen)
         $wbW = 0;
@@ -367,7 +361,7 @@ public function Create()
         if (is_string($nrg)) { $t = @json_decode($nrg, true); if (is_array($t)) $nrg = $t; }
         if (is_array($nrg) && isset($nrg[11]) && is_numeric($nrg[11])) {
             $wbW = (int)round(max(0.0, (float)$nrg[11]));
-        } elseif ($frc === 2) {
+        } elseif ($charging) {
             $ampLive = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
             if ($ampLive > 0) $wbW = (int)round($ampLive * $U * max(1,$phEff));
         }
@@ -382,10 +376,8 @@ public function Create()
         $connected   = in_array($car, [2,3,4], true);
         $battForCalc = ($connected && $batSoc >= 0 && $batSoc >= $minSoc) ? 0 : $battCharge;
 
-        // Überschuss
+        // Überschuss + EMA
         $surplusRaw = max(0, $pv - $battForCalc - $houseTotal + $wbW);
-
-        // EMA
         $alpha   = min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0));
         $emaPrev = (int)$this->ReadAttributeInteger('SlowSurplusW');
         $ema     = (int)round($alpha*$surplusRaw + (1.0-$alpha)*$emaPrev);
@@ -396,23 +388,33 @@ public function Create()
         $targetW = max(0, $ema - max(0, $reserveW));
         if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
         $this->WriteAttributeInteger('Slow_TargetW', (int)$targetW);
-
         $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW');
         if ($targetW < $minTargetW) { $targetW = 0; }
 
-        // Soll-Phasen/Ampere
+        // Soll-Phasen/Ampere (Plan)
         [$pmCalc,$aCalc] = $this->targetPhaseAmp((int)$targetW);
+        $pmCalcPh = ($pmCalc===3) ? 3 : 1;
 
-        // Anzeige: wenn wirklich am Laden → effektive Phasen, sonst Plan
-        $dispPh   = ($frc === 2) ? $phEff : (($pmCalc===3)?3:1);
-        $phaseTxt = ($dispPh===3?'3-phasig':($dispPh===2?'2-phasig':'1-phasig'));
-        $wSet     = (int)round(max(0,$aCalc) * $U * $dispPh);
+        // ===== Anzeige konsistent machen =====
+        // Wenn wirklich am Laden → effektive Phasen und LIVE-Ampere anzeigen,
+        // sonst geplante Phasen und aus Ziel-W die nötigen Ampere berechnen.
+        $dispPh = $charging ? $phEff : $pmCalcPh;
 
-        $this->SetValueSafe(
-            'Regelziel',
-            sprintf('%s · %d A · ≈ %s kW (PV-Ziel %s kW)',
-                $phaseTxt, max(0,$aCalc), $fmtKW($wSet), $fmtKW($targetW))
-        );
+        if ($charging) {
+            $dispA = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
+        } else {
+            $minA = (int)$this->ReadPropertyInteger('MinAmp');
+            $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
+            $dispA = ($dispPh > 0) ? (int)ceil($targetW / ($U * $dispPh)) : 0;
+            $dispA = min($maxA, max($minA, $dispA));
+        }
+
+        $dispW     = (int)round($dispA * $U * max(1,$dispPh));
+        $phaseTxt  = ($dispPh===3?'3-phasig':($dispPh===2?'2-phasig':'1-phasig'));
+        $this->SetValueSafe('Regelziel', sprintf(
+            '%s · %d A · ≈ %s kW (PV-Ziel %s kW)',
+            $phaseTxt, max(0,$dispA), $this->fmtKW($dispW), $this->fmtKW($targetW)
+        ));
         $this->WriteAttributeInteger('Slow_LastCalcA', max(0,$aCalc));
 
         // Hysteresezähler
@@ -434,12 +436,12 @@ public function Create()
         // Debug
         $fmtW = static fn($w)=>number_format((int)round($w),0,',','.') . ' W';
         $fmtA = static fn($a)=>number_format((int)round($a),0,',','.') . ' A';
-        $phDbg = ($phEff===3?'3p':($phEff===2?'2p':'1p'));
+        $phTxt = ($phEff===3?'3p':($phEff===2?'2p':'1p'));
         $this->dbgLog('PV-Überschuss', sprintf(
             'PV=%s - Batt(Laden)=%s - Haus=%s + WB=%s ⇒ Roh=%s | EMA=%s (α=%.2f) | Reserve=%s | Ziel=%s, ZielA=%s @ %d V · %s | SoC=%s%% (min %d%%)',
             $fmtW($pv), $fmtW($battCharge), $fmtW($houseTotal), $fmtW($wbW),
             $fmtW($surplusRaw), $fmtW((int)$ema), (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0,
-            $fmtW($reserveW), $fmtW($targetW), $fmtA($aCalc), (int)$U, $phDbg,
+            $fmtW($reserveW), $fmtW($targetW), $fmtA($aCalc), (int)$U, $phTxt,
             ($batSoc>=0? (int)round($batSoc): -1), $minSoc
         ));
     }
