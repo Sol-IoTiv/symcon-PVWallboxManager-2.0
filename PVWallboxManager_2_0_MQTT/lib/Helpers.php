@@ -351,8 +351,8 @@ private function unitScale(string $unit): float
 
 public function RenderLadechart(int $hours = 12): void
 {
-    $to   = time();
-    $from = $to - max(1, $hours) * 3600;
+    $daysBack = (int)@GetValue(@$this->GetIDForIdent('ChartDaysBack')); // 0=today, 1=gestern, ...
+    list($from, $to) = $this->dayRangeByOffset($daysBack);
 
     // Quellen aus Properties
     $pvID      = (int)$this->ReadPropertyInteger('VarPV_ID');
@@ -443,6 +443,14 @@ new Chart(document.getElementById('ldc').getContext('2d'),{
 HTML;
 
     $this->SetValue('Ladechart', $html);
+}
+
+private function dayRangeByOffset(int $daysBack): array
+{
+    // ganzer Tag [00:00 .. 24:00) des Offsets
+    $start = strtotime('-'.$daysBack.' day 00:00:00');
+    $end   = strtotime('-'.$daysBack.' day 23:59:59');
+    return [$start, $end];
 }
 
 

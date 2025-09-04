@@ -79,6 +79,15 @@ public function Create()
     // --- Profile ---
     $this->ensureProfiles(); // stellt u. a. PVWM.Mode, PVWM.FRC, PVWM.Phasen, GoE.Amp bereit
 
+    // Profil: 0..30 Tage zurück
+    if (!IPS_VariableProfileExists('PVWM.DaysBack')) {
+        IPS_CreateVariableProfile('PVWM.DaysBack', 1);               // Integer
+        IPS_SetVariableProfileValues('PVWM.DaysBack', 0, 30, 1);
+        IPS_SetVariableProfileText('PVWM.DaysBack', '', ' d');
+    }
+    $this->RegisterVariableInteger('ChartDaysBack', 'Chart: Tage zurück', 'PVWM.DaysBack', 890);
+    $this->EnableAction('ChartDaysBack');
+
     // --- Kern-Variablen (WebFront) ---
     // 0=PV-Automatik, 1=Manuell (fix), 2=Nur Anzeige
     $this->RegisterVariableInteger('Mode', 'Lademodus', 'PVWM.Mode', 5);
@@ -307,6 +316,12 @@ public function Create()
 
             case 'RenderLadechart':
                 $this->RenderLadechart((int)$Value ?: 12);
+                return;
+            
+            case 'ChartDaysBack':
+                $v = max(0, min(30, (int)$Value));
+                $this->SetValueSafe('ChartDaysBack', $v);
+                $this->TriggerChartUpdateSoon(500);
                 return;
         }
         throw new Exception("Invalid Ident $Ident");
