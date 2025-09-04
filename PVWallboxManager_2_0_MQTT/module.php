@@ -463,7 +463,7 @@ public function Create()
             ($batSoc>=0? (int)round($batSoc): -1), $minSoc
         ));
 
-        $this->RenderLadechart(12);
+//        $this->RenderLadechart(12);
 
     }
 
