@@ -351,7 +351,7 @@ private function unitScale(string $unit): float
 
 public function RenderLadechart(int $hours = 12): void
 {
-    $daysBack = (int)@GetValue(@$this->GetIDForIdent('ChartDaysBack')); // 0=today, 1=gestern, ...
+    $daysBack = (int)@GetValue(@$this->GetIDForIdent('ChartDaysBack')); // 0=today, 1=gestern
     list($from, $to) = $this->dayRangeByOffset($daysBack);
 
     // Quellen aus Properties
@@ -442,17 +442,32 @@ new Chart(document.getElementById('ldc').getContext('2d'),{
 </script>
 HTML;
 
-    $this->SetValue('Ladechart', $html);
+    $this->setHtmlIfChanged('Ladechart', $html);
 }
 
-private function dayRangeByOffset(int $daysBack): array
-{
-    // ganzer Tag [00:00 .. 24:00) des Offsets
-    $start = strtotime('-'.$daysBack.' day 00:00:00');
-    $end   = strtotime('-'.$daysBack.' day 23:59:59');
-    return [$start, $end];
-}
+    // flackern vermeiden: nur aktualisieren, wenn sich HTML ändert
+    private function setHtmlIfChanged(string $ident, string $html): void {
+        $vid = @$this->GetIDForIdent($ident);
+        if (!$vid) return;
+        $old = (string)@GetValue($vid);
+        if ($old !== $html) @SetValue($vid, $html);
+    }
 
+    // 0..n Tage zurück → Tagesbereich
+    private function dayRangeByOffset(int $daysBack): array {
+        $d = strtotime('-'.$daysBack.' day');
+        $start = strtotime(date('Y-m-d 00:00:00', $d));
+        $end   = strtotime(date('Y-m-d 23:59:59', $d));
+        return [$start, $end];
+    }
 
+    // Debounce ohne Timer
+    private function renderChartIfDue(int $minGapMs = 3000): void {
+        $now  = (int)(microtime(true)*1000);
+        $last = (int)$this->ReadAttributeInteger('LastChartUpdateMs');
+        if (($now - $last) < $minGapMs) return;
+        $this->WriteAttributeInteger('LastChartUpdateMs', $now);
+        $this->RenderLadechart(); // rendert sofort
+    }
 
 }

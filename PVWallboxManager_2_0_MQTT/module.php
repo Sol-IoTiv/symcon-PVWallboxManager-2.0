@@ -85,6 +85,7 @@ public function Create()
         IPS_SetVariableProfileValues('PVWM.DaysBack', 0, 30, 1);
         IPS_SetVariableProfileText('PVWM.DaysBack', '', ' d');
     }
+    $this->RegisterAttributeInteger('LastChartUpdateMs', 0);
     $this->RegisterVariableInteger('ChartDaysBack', 'Chart: Tage zurück', 'PVWM.DaysBack', 890);
     $this->EnableAction('ChartDaysBack');
 
@@ -246,15 +247,17 @@ public function Create()
                 return;
 
             case 'Mode':
-                $this->SetValueSafe('Mode', in_array((int)$Value,[0,1,2],true)?(int)$Value:0);
+                $this->SetValueSafe('Mode', in_array((int)$Value, [0,1,2], true) ? (int)$Value : 0);
                 $this->updateUiInteractivity();
+                $this->renderChartIfDue(1500);
                 return;
 
             case 'Ampere_A': {
                 if (!$this->isManualMode()) {
                     $cur = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
                     $this->SetValueSafe('Ampere_A', $cur); // UI zurück
-                    $this->SendDebug('UI','Amp ignoriert: nicht Manuell',0);
+                    $this->SendDebug('UI', 'Amp ignoriert: nicht Manuell', 0);
+                    $this->renderChartIfDue(1500);
                     return;
                 }
 
@@ -268,12 +271,14 @@ public function Create()
                 if ($connected) {
                     $this->setCurrentLimitA($a);
                     if ((int)@GetValue(@$this->GetIDForIdent('FRC')) !== 2) {
-                        $this->sendSet('frc','2'); @SetValue(@$this->GetIDForIdent('FRC'),2);
+                        $this->sendSet('frc', '2');
+                        @SetValue(@$this->GetIDForIdent('FRC'), 2);
                     }
-                    $nowMs = (int)(microtime(true)*1000);
+                    $nowMs = (int)(microtime(true) * 1000);
                     $this->WriteAttributeInteger('LastAmpSet',    $a);
                     $this->WriteAttributeInteger('LastPublishMs', $nowMs);
                 }
+                $this->renderChartIfDue(1500);
                 return;
             }
 
@@ -281,52 +286,55 @@ public function Create()
                 if (!$this->isManualMode()) {
                     $cur = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus'));
                     $this->SetValueSafe('Phasenmodus', $cur); // UI zurück
-                    $this->SendDebug('UI','Phase ignoriert: nicht Manuell',0);
+                    $this->SendDebug('UI', 'Phase ignoriert: nicht Manuell', 0);
+                    $this->renderChartIfDue(1500);
                     return;
                 }
 
                 $pm  = ((int)$Value === 3) ? 3 : 1;
                 $old = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus'));
-                if ($pm === $old) return;
+                if ($pm === $old) { $this->renderChartIfDue(1500); return; }
 
                 $this->SetValueSafe('Phasenmodus', $pm);
 
                 $connected = in_array((int)@GetValue(@$this->GetIDForIdent('CarState')), [2,3,4], true);
                 if ($connected) {
-                    // Sequenz über Timer
+                    // Sequenz wird anderswo abgearbeitet
                     $this->WriteAttributeInteger('PendingPhaseMode', $pm);
                     $this->WriteAttributeInteger('PhaseSwitchState', 0);
-                    $this->WriteAttributeInteger('LastPhaseSwitchMs', (int)(microtime(true)*1000));
+                    $this->WriteAttributeInteger('LastPhaseSwitchMs', (int)(microtime(true) * 1000));
+                    $this->renderChartIfDue(1500);
                     return;
                 }
 
                 // Kein Ladevorgang → direkt setzen
-                $this->sendSet('psm', ($pm===3)?'2':'1'); // go-e: 1=1P, 2=3P
-                $nowMs = (int)(microtime(true)*1000);
+                $this->sendSet('psm', ($pm === 3) ? '2' : '1'); // go-e: 1=1P, 2=3P
+                $nowMs = (int)(microtime(true) * 1000);
                 $this->WriteAttributeInteger('LastPhaseMode', $pm);
                 $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
+                $this->renderChartIfDue(1500);
                 return;
             }
 
             case 'FRC':
-                $frc = in_array((int)$Value,[0,1,2],true)?(int)$Value:0;
+                $frc = in_array((int)$Value, [0,1,2], true) ? (int)$Value : 0;
                 $this->SetValueSafe('FRC', $frc);
                 $this->sendSet('frc', (string)$frc);
+                $this->renderChartIfDue(1500);
                 return;
 
             case 'RenderLadechart':
-                $this->RenderLadechart((int)$Value ?: 12);
+                $this->renderChartIfDue(1500); // sofort, ohne Timer
                 return;
-            
+
             case 'ChartDaysBack':
                 $v = max(0, min(30, (int)$Value));
                 $this->SetValueSafe('ChartDaysBack', $v);
-                $this->TriggerChartUpdateSoon(500);
+                $this->RenderLadechart(); // direkt neu zeichnen
                 return;
         }
         throw new Exception("Invalid Ident $Ident");
     }
-
 
     // -------------------------
     // Slow: Anzeige (1 Hz) – nur berechnen/anzeigen
