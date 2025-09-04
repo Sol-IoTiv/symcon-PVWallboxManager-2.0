@@ -298,10 +298,26 @@ trait Helpers
         return number_format(max(0,$w)/1000, 1, ',', '.');
     }
 
+    private function setVarInteractive(string $ident, bool $enabled): void
+    {
+        $vid = @$this->GetIDForIdent($ident);
+        if ($vid) {
+            $action = $enabled ? $this->InstanceID : 0; // 0 = read-only
+            @IPS_SetVariableCustomAction($vid, $action);
+        }
+    }
+
     private function isManualMode(): bool
     {
-        $vid = @$this->GetIDForIdent('Mode'); // 0=PV, 1=Manuell, 2=Nur Anzeige
+        $vid = @$this->GetIDForIdent('Mode'); // 0=PV,1=Manuell,2=Nur Anzeige
         return ($vid && (int)@GetValue($vid) === 1);
+    }
+
+    private function updateUiInteractivity(): void
+    {
+        $manual = $this->isManualMode();
+        $this->setVarInteractive('Ampere_A',    $manual);
+        $this->setVarInteractive('Phasenmodus', $manual);
     }
 
 }

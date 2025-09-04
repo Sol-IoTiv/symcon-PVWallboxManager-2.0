@@ -201,6 +201,9 @@ public function Create()
         // Initiale Berechnung
         $this->RecalcHausverbrauchAbzWallbox(true);
         $this->SetStatus(IS_ACTIVE);
+
+        $this->updateUiInteractivity();
+
     }
 
     // -------------------------
@@ -233,6 +236,7 @@ public function Create()
 
             case 'Mode':
                 $this->SetValueSafe('Mode', in_array((int)$Value,[0,1,2],true)?(int)$Value:0);
+                $this->updateUiInteractivity();
                 return;
 
             case 'Ampere_A': {
@@ -302,7 +306,7 @@ public function Create()
         throw new Exception("Invalid Ident $Ident");
     }
 
-    
+
     // -------------------------
     // Slow: Anzeige (1 Hz) – nur berechnen/anzeigen
     // -------------------------
