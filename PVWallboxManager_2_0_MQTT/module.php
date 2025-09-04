@@ -236,30 +236,39 @@ public function Create()
                 return;
 
             case 'Ampere_A': {
+                if (!$this->isManualMode()) {
+                    $cur = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
+                    $this->SetValueSafe('Ampere_A', $cur); // UI zurück
+                    $this->SendDebug('UI','Amp ignoriert: nicht Manuell',0);
+                    return;
+                }
+
                 $a = (int)$Value;
+                $minA = (int)$this->ReadPropertyInteger('MinAmp');
+                $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
+                $a    = min($maxA, max($minA, $a));
                 $this->SetValueSafe('Ampere_A', $a);
 
-                if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 1) { // Manuell
-                    $minA = (int)$this->ReadPropertyInteger('MinAmp');
-                    $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
-                    $a    = min($maxA, max($minA, $a));
-
-                    $connected = in_array((int)@GetValue(@$this->GetIDForIdent('CarState')), [2,3,4], true);
-                    if ($connected) {
-                        $this->setCurrentLimitA($a);
-                        if ((int)@GetValue(@$this->GetIDForIdent('FRC')) !== 2) {
-                            $this->sendSet('frc','2'); @SetValue(@$this->GetIDForIdent('FRC'),2);
-                        }
-                        $nowMs = (int)(microtime(true)*1000);
-                        $this->WriteAttributeInteger('LastAmpSet',    $a);
-                        $this->WriteAttributeInteger('LastPublishMs', $nowMs);
+                $connected = in_array((int)@GetValue(@$this->GetIDForIdent('CarState')), [2,3,4], true);
+                if ($connected) {
+                    $this->setCurrentLimitA($a);
+                    if ((int)@GetValue(@$this->GetIDForIdent('FRC')) !== 2) {
+                        $this->sendSet('frc','2'); @SetValue(@$this->GetIDForIdent('FRC'),2);
                     }
+                    $nowMs = (int)(microtime(true)*1000);
+                    $this->WriteAttributeInteger('LastAmpSet',    $a);
+                    $this->WriteAttributeInteger('LastPublishMs', $nowMs);
                 }
                 return;
             }
 
             case 'Phasenmodus': {
-                if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 2) return; // Nur Anzeige
+                if (!$this->isManualMode()) {
+                    $cur = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus'));
+                    $this->SetValueSafe('Phasenmodus', $cur); // UI zurück
+                    $this->SendDebug('UI','Phase ignoriert: nicht Manuell',0);
+                    return;
+                }
 
                 $pm  = ((int)$Value === 3) ? 3 : 1;
                 $old = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus'));
@@ -267,19 +276,17 @@ public function Create()
 
                 $this->SetValueSafe('Phasenmodus', $pm);
 
-                // Manuell: Sequenz im Timer abarbeiten lassen
-                if ((int)@GetValue(@$this->GetIDForIdent('Mode')) === 1) {
-                    $connected = in_array((int)@GetValue(@$this->GetIDForIdent('CarState')), [2,3,4], true);
-                    if ($connected) {
-                        $this->WriteAttributeInteger('PendingPhaseMode', $pm);
-                        $this->WriteAttributeInteger('PhaseSwitchState', 0);
-                        $this->WriteAttributeInteger('LastPhaseSwitchMs', (int)(microtime(true)*1000));
-                        return;
-                    }
+                $connected = in_array((int)@GetValue(@$this->GetIDForIdent('CarState')), [2,3,4], true);
+                if ($connected) {
+                    // Sequenz über Timer
+                    $this->WriteAttributeInteger('PendingPhaseMode', $pm);
+                    $this->WriteAttributeInteger('PhaseSwitchState', 0);
+                    $this->WriteAttributeInteger('LastPhaseSwitchMs', (int)(microtime(true)*1000));
+                    return;
                 }
 
                 // Kein Ladevorgang → direkt setzen
-                $this->sendSet('psm', ($pm===3)?'2':'1');
+                $this->sendSet('psm', ($pm===3)?'2':'1'); // go-e: 1=1P, 2=3P
                 $nowMs = (int)(microtime(true)*1000);
                 $this->WriteAttributeInteger('LastPhaseMode', $pm);
                 $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);

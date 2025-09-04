@@ -298,5 +298,10 @@ trait Helpers
         return number_format(max(0,$w)/1000, 1, ',', '.');
     }
 
+    private function isManualMode(): bool
+    {
+        $vid = @$this->GetIDForIdent('Mode'); // 0=PV, 1=Manuell, 2=Nur Anzeige
+        return ($vid && (int)@GetValue($vid) === 1);
+    }
 
 }
