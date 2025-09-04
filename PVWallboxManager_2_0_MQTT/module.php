@@ -107,6 +107,8 @@ public function Create()
     // Kompakte Zielanzeige (ersetzt einzelne Ziel-Variablen)
     $this->RegisterVariableString('Regelziel', 'Regelziel', '', 80);
 
+    $this->RegisterVariableString('Ladechart', 'Ladechart', '~HTMLBox', 900);
+
     // --- Altlasten entfernen / migrieren ---
     @ $this->UnregisterVariable('SlowControlActive');     // „Slow-Regler aktiv“ entfällt
     @ $this->UnregisterVariable('TargetA_Live');          // ersetzt durch Regelziel
@@ -301,6 +303,10 @@ public function Create()
                 $frc = in_array((int)$Value,[0,1,2],true)?(int)$Value:0;
                 $this->SetValueSafe('FRC', $frc);
                 $this->sendSet('frc', (string)$frc);
+                return;
+
+            case 'RenderLadechart':
+                $this->RenderLadechart((int)$Value ?: 12);
                 return;
         }
         throw new Exception("Invalid Ident $Ident");

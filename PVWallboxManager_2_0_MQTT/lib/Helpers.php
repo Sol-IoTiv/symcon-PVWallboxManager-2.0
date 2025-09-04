@@ -324,4 +324,82 @@ trait Helpers
         $this->setVarReadOnly('Phasenmodus', $ro);
     }
 
+    private function acId(): int {
+    $ac = (int)$this->ReadPropertyInteger('ArchiveControlID');
+    return $ac > 0 ? $ac : 35472; // Fallback aus deinem Setup
+}
+private function series(int $vid, int $from, int $to): array {
+    if ($vid <= 0 || !@IPS_VariableExists($vid)) return [];
+    $rows = @AC_GetLoggedValues($this->acId(), $vid, $from, $to, 0);
+    $out = [];
+    foreach ($rows as $r) $out[] = [ $r['TimeStamp'] * 1000, (float)$r['Value'] ];
+    return $out;
+}
+public function RenderLadechart(int $hours = 12): void {
+    $to   = time(); $from = $to - max(1,$hours)*3600;
+
+    // IDs aus Properties/Idents holen. Passe ggf. an.
+    $pvID   = (int)$this->ReadPropertyInteger('PVErzeugungID');
+    $hvID   = (int)$this->ReadPropertyInteger('HausverbrauchID');
+    $batID  = (int)$this->ReadPropertyInteger('BatterieladungID');
+    $wbID   = (int)@$this->GetIDForIdent('Leistung');         // Power to car
+    $socID  = (int)$this->ReadPropertyInteger('VehicleSocID'); // optional
+
+    $data = [
+        'pv'   => $this->series($pvID,  $from, $to),
+        'haus' => $this->series($hvID,  $from, $to),
+        'bat'  => $this->series($batID, $from, $to),
+        'wb'   => $this->series($wbID,  $from, $to),
+        'soc'  => $this->series($socID, $from, $to),
+        'thr'  => [
+            'startW' => (int)$this->ReadPropertyInteger('MinLadeWatt') ?: 1400,
+            'stopW'  => (int)$this->ReadPropertyInteger('StopLadeWatt') ?: -300,
+            'oneP'   => 1600,
+            'threeP' => 4200
+        ]
+    ];
+    $json = json_encode($data);
+
+    $html = <<<HTML
+<div style="padding:6px"><canvas id="ldc" height="220"></canvas></div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+<script>
+const D = $json;
+const x0 = (D.pv[0]?.[0]) ?? (Date.now()-12*3600*1000);
+const x1 = (D.pv.at(-1)?.[0]) ?? Date.now();
+const ds = [
+  {label:'PV [W]',        data:D.pv,   parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'yW'},
+  {label:'Haus [W]',      data:D.haus, parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'yW'},
+  {label:'Batterie [W]',  data:D.bat,  parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'yW'},
+  {label:'Wallbox [W]',   data:D.wb,   parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'yW'},
+  {label:'SoC [%]',       data:D.soc,  parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'ySOC'}
+];
+// Schwellen als Linien
+function line(label, y){ return {label, data:[[x0,y],[x1,y]], yAxisID:'yW', borderDash:[5,4], pointRadius:0}; }
+ds.push(line('Startschwelle', D.thr.startW));
+ds.push(line('Stoppschwelle', D.thr.stopW));
+ds.push(line('1P-Schwelle',   D.thr.oneP));
+ds.push(line('3P-Schwelle',   D.thr.threeP));
+
+new Chart(document.getElementById('ldc').getContext('2d'),{
+  type:'line',
+  data:{datasets:ds},
+  options:{
+    parsing:false,
+    interaction:{mode:'nearest', intersect:false},
+    scales:{
+      x:{type:'time', time:{tooltipFormat:'dd.MM HH:mm'}},
+      yW:{type:'linear', position:'left'},
+      ySOC:{type:'linear', position:'right', min:0, max:100, grid:{drawOnChartArea:false}}
+    },
+    plugins:{legend:{position:'top'}}
+  }
+});
+</script>
+HTML;
+    $this->SetValue('Ladechart', $html);
+}
+
+
 }
