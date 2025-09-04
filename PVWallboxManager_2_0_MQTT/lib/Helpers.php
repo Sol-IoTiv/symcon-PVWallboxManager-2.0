@@ -324,40 +324,75 @@ trait Helpers
         $this->setVarReadOnly('Phasenmodus', $ro);
     }
 
-    private function acId(): int {
-    $ac = (int)$this->ReadPropertyInteger('ArchiveControlID');
-    return $ac > 0 ? $ac : 35472; // Fallback aus deinem Setup
+// GUID Archiv: {43192F0B-135B-4CE7-A0A7-1475603F3060}
+private function acId(): int
+{
+    $list = @IPS_GetInstanceListByModuleID('{43192F0B-135B-4CE7-A0A7-1475603F3060}');
+    if (is_array($list) && count($list) > 0) return (int)$list[0];
+    return 35472; // Fallback aus deinem Setup
 }
-private function series(int $vid, int $from, int $to): array {
+
+private function seriesLogged(int $vid, int $from, int $to, float $scale = 1.0): array
+{
     if ($vid <= 0 || !@IPS_VariableExists($vid)) return [];
     $rows = @AC_GetLoggedValues($this->acId(), $vid, $from, $to, 0);
+    if (!is_array($rows)) return [];
     $out = [];
-    foreach ($rows as $r) $out[] = [ $r['TimeStamp'] * 1000, (float)$r['Value'] ];
+    foreach ($rows as $r) $out[] = [$r['TimeStamp'] * 1000, (float)$r['Value'] * $scale];
     return $out;
 }
-public function RenderLadechart(int $hours = 12): void {
-    $to   = time(); $from = $to - max(1,$hours)*3600;
 
-    // IDs aus Properties/Idents holen. Passe ggf. an.
-    $pvID   = (int)$this->ReadPropertyInteger('PVErzeugungID');
-    $hvID   = (int)$this->ReadPropertyInteger('HausverbrauchID');
-    $batID  = (int)$this->ReadPropertyInteger('BatterieladungID');
-    $wbID   = (int)@$this->GetIDForIdent('Leistung');         // Power to car
-    $socID  = (int)$this->ReadPropertyInteger('VehicleSocID'); // optional
+private function unitScale(string $unit): float
+{
+    $u = strtolower(trim($unit));
+    if ($u === 'kw') return 1000.0;
+    return 1.0; // 'w' oder unbekannt
+}
 
-    $data = [
-        'pv'   => $this->series($pvID,  $from, $to),
-        'haus' => $this->series($hvID,  $from, $to),
-        'bat'  => $this->series($batID, $from, $to),
-        'wb'   => $this->series($wbID,  $from, $to),
-        'soc'  => $this->series($socID, $from, $to),
-        'thr'  => [
-            'startW' => (int)$this->ReadPropertyInteger('MinLadeWatt') ?: 1400,
-            'stopW'  => (int)$this->ReadPropertyInteger('StopLadeWatt') ?: -300,
-            'oneP'   => 1600,
-            'threeP' => 4200
-        ]
+public function RenderLadechart(int $hours = 12): void
+{
+    $to   = time();
+    $from = $to - max(1, $hours) * 3600;
+
+    // Quellen aus Properties
+    $pvID      = (int)$this->ReadPropertyInteger('VarPV_ID');
+    $pvScale   = $this->unitScale($this->ReadPropertyString('VarPV_Unit'));
+
+    $houseProp = (int)$this->ReadPropertyInteger('VarHouse_ID');
+    $houseScale= $this->unitScale($this->ReadPropertyString('VarHouse_Unit'));
+
+    $batID     = (int)$this->ReadPropertyInteger('VarBattery_ID');
+    $batScale  = $this->unitScale($this->ReadPropertyString('VarBattery_Unit'));
+
+    $socID     = (int)$this->ReadPropertyInteger('VarBatterySoc_ID');
+
+    // Modul-Variablen (intern erzeugt)
+    $wbID      = (int)@$this->GetIDForIdent('PowerToCar_W');
+    $houseNet  = (int)@$this->GetIDForIdent('HouseNet_W'); // bevorzugt „ohne WB“
+
+    // Daten holen
+    $pv   = $this->seriesLogged($pvID,   $from, $to, $pvScale);
+    $wb   = $this->seriesLogged($wbID,   $from, $to, 1.0);
+    $soc  = $this->seriesLogged($socID,  $from, $to, 1.0);
+
+    // Haus: nimm HouseNet_W wenn vorhanden, sonst Property
+    $haus = $this->seriesLogged($houseNet ?: 0, $from, $to, 1.0);
+    if (count($haus) === 0 && $houseProp > 0) {
+        $haus = $this->seriesLogged($houseProp, $from, $to, $houseScale);
+    }
+
+    // Batterie (Vorzeichen bleibt gemäß Quelle; nur Einheitsskalierung)
+    $bat  = $this->seriesLogged($batID,  $from, $to, $batScale);
+
+    // Schwellen aus Properties
+    $thr = [
+        'startW' => (int)$this->ReadPropertyInteger('StartThresholdW'),
+        'stopW'  => (int)$this->ReadPropertyInteger('StopThresholdW'),
+        'to1p'   => (int)$this->ReadPropertyInteger('ThresTo1p_W'),
+        'to3p'   => (int)$this->ReadPropertyInteger('ThresTo3p_W'),
     ];
+
+    $data = [ 'pv'=>$pv, 'haus'=>$haus, 'bat'=>$bat, 'wb'=>$wb, 'soc'=>$soc, 'thr'=>$thr ];
     $json = json_encode($data);
 
     $html = <<<HTML
@@ -366,21 +401,29 @@ public function RenderLadechart(int $hours = 12): void {
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
 <script>
 const D = $json;
-const x0 = (D.pv[0]?.[0]) ?? (Date.now()-12*3600*1000);
-const x1 = (D.pv.at(-1)?.[0]) ?? Date.now();
+function x0() {
+  const arrs = [D.pv,D.haus,D.bat,D.wb,D.soc].filter(a=>a && a.length);
+  if (!arrs.length) return Date.now()-12*3600*1000;
+  return Math.min(...arrs.map(a=>a[0][0]));
+}
+function x1() {
+  const arrs = [D.pv,D.haus,D.bat,D.wb,D.soc].filter(a=>a && a.length);
+  if (!arrs.length) return Date.now();
+  return Math.max(...arrs.map(a=>a[a.length-1][0]));
+}
+const X0 = x0(), X1 = x1();
 const ds = [
-  {label:'PV [W]',        data:D.pv,   parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'yW'},
-  {label:'Haus [W]',      data:D.haus, parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'yW'},
-  {label:'Batterie [W]',  data:D.bat,  parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'yW'},
-  {label:'Wallbox [W]',   data:D.wb,   parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'yW'},
-  {label:'SoC [%]',       data:D.soc,  parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'ySOC'}
+  {label:'PV [W]',       data:D.pv,   parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'yW',  pointRadius:0},
+  {label:'Haus o. WB [W]',data:D.haus,parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'yW',  pointRadius:0},
+  {label:'Batterie [W]', data:D.bat,  parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'yW',  pointRadius:0},
+  {label:'Wallbox [W]',  data:D.wb,   parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'yW',  pointRadius:0},
+  {label:'SoC [%]',      data:D.soc,  parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'ySOC',pointRadius:0}
 ];
-// Schwellen als Linien
-function line(label, y){ return {label, data:[[x0,y],[x1,y]], yAxisID:'yW', borderDash:[5,4], pointRadius:0}; }
-ds.push(line('Startschwelle', D.thr.startW));
-ds.push(line('Stoppschwelle', D.thr.stopW));
-ds.push(line('1P-Schwelle',   D.thr.oneP));
-ds.push(line('3P-Schwelle',   D.thr.threeP));
+function line(label, y){ return {label, data:[[X0,y],[X1,y]], yAxisID:'yW', borderDash:[5,4], pointRadius:0}; }
+if (Number.isFinite(D.thr.startW)) ds.push(line('Startschwelle', D.thr.startW));
+if (Number.isFinite(D.thr.stopW))  ds.push(line('Stoppschwelle',  D.thr.stopW));
+if (Number.isFinite(D.thr.to1p))   ds.push(line('→1-phasig',      D.thr.to1p));
+if (Number.isFinite(D.thr.to3p))   ds.push(line('→3-phasig',      D.thr.to3p));
 
 new Chart(document.getElementById('ldc').getContext('2d'),{
   type:'line',
@@ -398,8 +441,10 @@ new Chart(document.getElementById('ldc').getContext('2d'),{
 });
 </script>
 HTML;
+
     $this->SetValue('Ladechart', $html);
 }
+
 
 
 }

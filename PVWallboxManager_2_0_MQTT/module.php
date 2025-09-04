@@ -462,6 +462,9 @@ public function Create()
             $fmtW($reserveW), $fmtW($targetW), $fmtA($aCalc), (int)$U, $phTxt,
             ($batSoc>=0? (int)round($batSoc): -1), $minSoc
         ));
+
+        $this->RenderLadechart(12);
+
     }
 
     public function SLOW_TickControl(): void
