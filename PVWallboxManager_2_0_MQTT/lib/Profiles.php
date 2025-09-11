@@ -47,6 +47,7 @@ trait Profiles
         IPS_SetVariableProfileAssociation('PVWM.Mode', 0, 'PV-Automatik', '', -1);
         IPS_SetVariableProfileAssociation('PVWM.Mode', 1, 'Manuell (fix)', '', -1);
         IPS_SetVariableProfileAssociation('PVWM.Mode', 2, 'Nur Anzeige',   '', -1);
+        IPS_SetVariableProfileAssociation('PVWM.Mode', 3, 'PV-Anteil', '', -1);
 
         // --- Optional: Legacy-Profile belassen (falls irgendwo referenziert)
         if (!IPS_VariableProfileExists('GoE.PhaseMode')) {

@@ -96,6 +96,17 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterVariableInteger('Ampere_A', 'Ampere [A]', 'GoE.Amp', 10);
         $this->EnableAction('Ampere_A');
 
+        // ... nach Ampere_A registrieren (Position anpassen nach Bedarf)
+        if (!IPS_VariableProfileExists('PVWM.Percent')) {
+            IPS_CreateVariableProfile('PVWM.Percent', 1);
+            IPS_SetVariableProfileValues('PVWM.Percent', 0, 100, 1);
+            IPS_SetVariableProfileText('PVWM.Percent', '', ' %');
+        }
+
+        $this->RegisterPropertyInteger('PVShareDefaultPct', 50);
+        $this->RegisterVariableInteger('PVShare_Pct', 'PV-Anteil', 'PVWM.Percent', 15);
+        $this->EnableAction('PVShare_Pct');
+
         $this->RegisterVariableInteger('PowerToCar_W', 'Ladeleistung [W]', '~Watt', 20);
         $this->RegisterVariableInteger('HouseNet_W',   'Hausverbrauch (ohne WB) [W]', '~Watt', 21);
         $this->RegisterVariableInteger('CarState',     'Fahrzeugstatus', 'GoE.CarState', 25);
@@ -168,6 +179,16 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             if ($cur !== $clamped) { @SetValue($vidAmp, $clamped); }
         }
 
+        // PV-Anteil: Slider ggf. auf Default setzen und auf 0..100 begrenzen
+        if ($vidShare = @$this->GetIDForIdent('PVShare_Pct')) {
+            $v = (int)@GetValue($vidShare);
+            if ($v < 0 || $v > 100) {
+                $def = (int)$this->ReadPropertyInteger('PVShareDefaultPct');
+                $def = max(0, min(100, $def));
+                @SetValue($vidShare, $def);
+            }
+        }
+
         // MQTT attach + Subscribe (Trait)
         if (!$this->attachAndSubscribe()) {
             $this->SetTimerInterval('LOOP', 0);
@@ -202,7 +223,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->SetStatus(IS_ACTIVE);
 
         $this->updateUiInteractivity();
-
     }
 
     // -------------------------
@@ -234,7 +254,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 return;
 
             case 'Mode':
-                $this->SetValueSafe('Mode', in_array((int)$Value, [0,1,2], true) ? (int)$Value : 0);
+                $this->SetValueSafe('Mode', in_array((int)$Value, [0,1,2,3], true) ? (int)$Value : 0);
                 $this->updateUiInteractivity();
                 $this->renderChartIfDue(1500);
                 return;
@@ -317,6 +337,12 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 $this->SetValueSafe('ChartDaysBack', $v);
                 $this->RenderLadechart(); // direkt neu zeichnen
                 return;
+            
+            case 'PVShare_Pct':
+                $pct = max(0, min(100, (int)$Value));
+                $this->SetValueSafe('PVShare_Pct', $pct);
+                $this->renderChartIfDue(1500);
+                return;
         }
         throw new Exception("Invalid Ident $Ident");
     }
@@ -335,7 +361,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         }
 
         $U    = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
-        $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV, 1=Manuell, 2=Nur Anzeige
+        $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV, 1=Manuell, 2=Nur Anzeige, 3=PV-Anteil
 
         // ===== MANUELL (fix): Zieltext + reale/geschätzte WB-Leistung =====
         if ($mode === 1) {
@@ -361,7 +387,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             return;
         }
 
-        // ===== PV-AUTOMATIK =====
+        // ===== PV-AUTOMATIK / PV-ANTEIL =====
         $pv = (int)round((float)$this->readVarWUnit('VarPV_ID','VarPV_Unit'));
 
         // Batterie: nur Laden als Verbrauch
@@ -402,8 +428,18 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $connected   = in_array($car, [2,3,4], true);
         $battForCalc = ($connected && $batSoc >= 0 && $batSoc >= $minSoc) ? 0 : $battCharge;
 
-        // Überschuss + EMA
-        $surplusRaw = $pv - $battForCalc - $houseTotal + $wbW;
+        // Haus ohne WB (für PV-Anteil)
+        $houseNetVid = @$this->GetIDForIdent('HouseNet_W');
+        $houseNet    = $houseNetVid ? (int)@GetValue($houseNetVid) : ($houseTotal - $wbW);
+
+        $useShareMode = ($mode === 3);
+
+        // Überschuss-Rohwert
+        $surplusRaw = $useShareMode
+            ? ($pv - $houseNet)                         // Überschuss vor Akku/Auto
+            : ($pv - $battForCalc - $houseTotal + $wbW);// bestehende PV-Auto-Logik
+
+        // EMA
         $alpha   = min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0));
         $emaPrev = (int)$this->ReadAttributeInteger('SlowSurplusW');
         $ema     = (int)round($alpha*$surplusRaw + (1.0-$alpha)*$emaPrev);
@@ -411,8 +447,20 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->WriteAttributeInteger('Slow_SurplusRaw', $surplusRaw);
 
         // Ziel
-        $targetW = max(0, $ema - max(0, $reserveW));
-        if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
+        if ($useShareMode) {
+            $sliderPct = (int)@GetValue(@$this->GetIDForIdent('PVShare_Pct'));
+            $sliderPct = max(0, min(100, $sliderPct));
+            $fullOrNone = ($batSocID <= 0) || ($batSoc >= 99.0); // kein Akku oder voll
+            $pctEff = $fullOrNone ? 100 : $sliderPct;
+
+            $targetW = max(0, (int)round( ($ema - max(0,$reserveW)) * $pctEff / 100.0 ));
+            // SoC-Gurt: erst Akku laden, dann Auto
+            if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
+        } else {
+            $targetW = max(0, $ema - max(0, $reserveW));
+            if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
+        }
+
         $this->WriteAttributeInteger('Slow_TargetW', (int)$targetW);
         $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW');
         if ($targetW < $minTargetW) { $targetW = 0; }
@@ -421,9 +469,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         [$pmCalc,$aCalc] = $this->targetPhaseAmp((int)$targetW);
         $pmCalcPh = ($pmCalc===3) ? 3 : 1;
 
-        // ===== Anzeige konsistent machen =====
-        // Wenn wirklich am Laden → effektive Phasen und LIVE-Ampere anzeigen,
-        // sonst geplante Phasen und aus Ziel-W die nötigen Ampere berechnen.
+        // Anzeige konsistent
         $dispPh = $charging ? $phEff : $pmCalcPh;
 
         if ($charging) {
@@ -435,12 +481,21 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             $dispA = min($maxA, max($minA, $dispA));
         }
 
-        $dispW     = (int)round($dispA * $U * max(1,$dispPh));
-        $phaseTxt  = ($dispPh===3?'3-phasig':($dispPh===2?'2-phasig':'1-phasig'));
-        $this->SetValueSafe('Regelziel', sprintf(
-            '%s · %d A · ≈ %s kW (PV-Ziel %s kW)',
-            $phaseTxt, max(0,$dispA), $this->fmtKW($dispW), $this->fmtKW($targetW)
-        ));
+        $dispW    = (int)round($dispA * $U * max(1,$dispPh));
+        $phaseTxt = ($dispPh===3?'3-phasig':($dispPh===2?'2-phasig':'1-phasig'));
+
+        if ($useShareMode) {
+            $sliderPctShow = (int)@GetValue(@$this->GetIDForIdent('PVShare_Pct')); // Anzeige bleibt wie eingestellt
+            $this->SetValueSafe('Regelziel', sprintf(
+                'PV-Anteil %d%% · %s · %d A · ≈ %s kW (PV-Ziel %s kW)',
+                $sliderPctShow, $phaseTxt, max(0,$dispA), $this->fmtKW($dispW), $this->fmtKW($targetW)
+            ));
+        } else {
+            $this->SetValueSafe('Regelziel', sprintf(
+                '%s · %d A · ≈ %s kW (PV-Ziel %s kW)',
+                $phaseTxt, max(0,$dispA), $this->fmtKW($dispW), $this->fmtKW($targetW)
+            ));
+        }
         $this->WriteAttributeInteger('Slow_LastCalcA', max(0,$aCalc));
 
         // Hysteresezähler
@@ -464,22 +519,20 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $fmtA = static fn($a)=>number_format((int)round($a),0,',','.') . ' A';
         $phTxt = ($phEff===3?'3p':($phEff===2?'2p':'1p'));
         $this->dbgLog('PV-Überschuss', sprintf(
-            'PV=%s - Batt(Laden)=%s - Haus=%s + WB=%s ⇒ Roh=%s | EMA=%s (α=%.2f) | Reserve=%s | Ziel=%s, ZielA=%s @ %d V · %s | SoC=%s%% (min %d%%)',
+            '[%s] PV=%s - Batt(Laden)=%s - Haus=%s + WB=%s ⇒ Roh=%s | EMA=%s (α=%.2f) | Reserve=%s | Ziel=%s, ZielA=%s @ %d V · %s | SoC=%s%% (min %d%%)',
+            ($useShareMode ? 'PV-Anteil' : 'PV-Auto'),
             $fmtW($pv), $fmtW($battCharge), $fmtW($houseTotal), $fmtW($wbW),
             $fmtW($surplusRaw), $fmtW((int)$ema), (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0,
             $fmtW($reserveW), $fmtW($targetW), $fmtA($aCalc), (int)$U, $phTxt,
             ($batSoc>=0? (int)round($batSoc): -1), $minSoc
         ));
-
-//        $this->RenderLadechart(12);
-
     }
 
     public function SLOW_TickControl(): void
     {
         if (!$this->ReadPropertyBoolean('SlowControlEnabled')) return;
 
-        $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV,1=Manuell,2=Aus
+        $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV,1=Manuell,2=Nur Anzeige,3=PV-Anteil
         if ($mode === 2) return;
 
         $nowMs   = (int)(microtime(true)*1000);
@@ -819,6 +872,14 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                             'type'    => 'Label',
                             'caption' => 'Erlaubt Laden nur wenn SoC ≥ Mindest-SoC. ReserveW wird vom PV-Überschuss abgezogen.'
                         ]
+                    ]
+                ],
+                [
+                    'type'    => 'ExpansionPanel',
+                    'caption' => '🔀 PV-Anteil',
+                    'items'   => [
+                        ['type' => 'NumberSpinner', 'name' => 'PVShareDefaultPct', 'caption' => 'Standard-Anteil fürs WebFront', 'minimum' => 0, 'maximum' => 100, 'suffix' => ' %'],
+                        ['type' => 'Label', 'caption' => 'Im Modus „PV-Anteil“ verteilt der Schieberegler den PV-Überschuss zwischen Auto und Hausakku. Akku voll oder nicht vorhanden → 100% zur Wallbox.']
                     ]
                 ],
                 [
