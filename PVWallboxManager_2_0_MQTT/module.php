@@ -16,154 +16,141 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     // -------------------------
     // Lifecycle
     // -------------------------
-public function Create()
-{
-    parent::Create();
+    public function Create()
+    {
+        parent::Create();
 
-    // --- Debug ---
-    $this->RegisterPropertyBoolean('DebugPVWM', false);
-    $this->RegisterPropertyBoolean('DebugMQTT', false);
+        // --- Debug ---
+        $this->RegisterPropertyBoolean('DebugPVWM', false);
+        $this->RegisterPropertyBoolean('DebugMQTT', false);
 
-    // --- MQTT Basis ---
-    $this->RegisterPropertyString('BaseTopic', '');
-    $this->RegisterAttributeString('AutoBaseTopic', '');
-    $this->RegisterPropertyString('DeviceIDFilter', '');
-    $this->RegisterAttributeString('MQTT_BUF', '{}');
+        // --- MQTT Basis ---
+        $this->RegisterPropertyString('BaseTopic', '');
+        $this->RegisterAttributeString('AutoBaseTopic', '');
+        $this->RegisterPropertyString('DeviceIDFilter', '');
+        $this->RegisterAttributeString('MQTT_BUF', '{}');
 
-    // --- Energiequellen ---
-    $this->RegisterPropertyInteger('VarPV_ID', 0);
-    $this->RegisterPropertyString('VarPV_Unit', 'W');
-    $this->RegisterPropertyInteger('VarHouse_ID', 0);
-    $this->RegisterPropertyString('VarHouse_Unit', 'W');
-    $this->RegisterPropertyInteger('VarBattery_ID', 0);
-    $this->RegisterPropertyString('VarBattery_Unit', 'W');
-    $this->RegisterPropertyBoolean('BatteryPositiveIsCharge', true);
+        // --- Energiequellen ---
+        $this->RegisterPropertyInteger('VarPV_ID', 0);
+        $this->RegisterPropertyString('VarPV_Unit', 'W');
+        $this->RegisterPropertyInteger('VarHouse_ID', 0);
+        $this->RegisterPropertyString('VarHouse_Unit', 'W');
+        $this->RegisterPropertyInteger('VarBattery_ID', 0);
+        $this->RegisterPropertyString('VarBattery_Unit', 'W');
+        $this->RegisterPropertyBoolean('BatteryPositiveIsCharge', true);
 
-    // Batterie-Logik
-    $this->RegisterPropertyInteger('VarBatterySoc_ID', 0);
-    $this->RegisterPropertyInteger('BatteryMinSocForPV', 90);
-    $this->RegisterPropertyInteger('BatteryReserveW', 300);
+        // Batterie-Logik
+        $this->RegisterPropertyInteger('VarBatterySoc_ID', 0);
+        $this->RegisterPropertyInteger('BatteryMinSocForPV', 90);
+        $this->RegisterPropertyInteger('BatteryReserveW', 300);
 
-    // --- Start/Stop-Hysterese ---
-    $this->RegisterPropertyInteger('StartThresholdW', 1400);
-    $this->RegisterPropertyInteger('StopThresholdW', 1100);
-    $this->RegisterPropertyInteger('StartCycles', 3);
-    $this->RegisterPropertyInteger('StopCycles', 3);
+        // --- Phasenumschaltung ---
+        $this->RegisterPropertyInteger('ThresTo1p_W', 3680);
+        $this->RegisterPropertyInteger('To1pCycles', 3);
+        $this->RegisterPropertyInteger('ThresTo3p_W', 4140);
+        $this->RegisterPropertyInteger('To3pCycles', 3);
+        $this->RegisterPropertyBoolean('SnapOnConnect', true);
+        $this->RegisterPropertyBoolean('AutoPhase', true);
 
-    // --- Phasenumschaltung ---
-    $this->RegisterPropertyInteger('ThresTo1p_W', 3680);
-    $this->RegisterPropertyInteger('To1pCycles', 3);
-    $this->RegisterPropertyInteger('ThresTo3p_W', 4140);
-    $this->RegisterPropertyInteger('To3pCycles', 3);
-    $this->RegisterPropertyBoolean('SnapOnConnect', true);
-    $this->RegisterPropertyBoolean('AutoPhase', true);
+        // --- Netz-/Strom-Parameter & Zeiten ---
+        $this->RegisterPropertyInteger('MinAmp', 6);
+        $this->RegisterPropertyInteger('MaxAmp', 16);
+        $this->RegisterPropertyInteger('NominalVolt', 230);
+        $this->RegisterPropertyInteger('MinHoldAfterPhaseMs', 30000);
+        $this->RegisterPropertyInteger('MinPublishGapMs', 5000);
+        $this->RegisterPropertyInteger('WBSubtractMinW', 100);
+        $this->RegisterPropertyInteger('StartReserveW', 200);
+        $this->RegisterPropertyInteger('MinOnTimeMs',  60000);
+        $this->RegisterPropertyInteger('MinOffTimeMs', 15000);
+        $this->RegisterPropertyInteger('RampStepA', 1);
 
-    // --- Netz-/Strom-Parameter & Zeiten ---
-    $this->RegisterPropertyInteger('MinAmp', 6);
-    $this->RegisterPropertyInteger('MaxAmp', 16);
-    $this->RegisterPropertyInteger('NominalVolt', 230);
-    $this->RegisterPropertyInteger('MinHoldAfterPhaseMs', 30000);
-    $this->RegisterPropertyInteger('MinPublishGapMs', 5000);
-    $this->RegisterPropertyInteger('WBSubtractMinW', 100);
-    $this->RegisterPropertyInteger('StartReserveW', 200);
-    $this->RegisterPropertyInteger('MinOnTimeMs',  60000);
-    $this->RegisterPropertyInteger('MinOffTimeMs', 15000);
-    $this->RegisterPropertyInteger('RampStepA', 1);
+        // --- Slow-Control ---
+        $this->RegisterPropertyBoolean('SlowControlEnabled', true);
+        $this->RegisterPropertyInteger('ControlIntervalSec', 15);
+        $this->RegisterPropertyInteger('SlowAlphaPermille', 250);
+        $this->RegisterPropertyInteger('TargetMinW', 1380);
 
-    // --- Slow-Control (bleibt intern, kein eigener WebFront-Schalter) ---
-    $this->RegisterPropertyBoolean('SlowControlEnabled', true);
-    $this->RegisterPropertyInteger('ControlIntervalSec', 15);
-    $this->RegisterPropertyInteger('SlowAlphaPermille', 250);
-    $this->RegisterPropertyInteger('TargetMinW', 1380);
+        // --- Anti-Flackern: Properties ---
+        $this->RegisterPropertyInteger('StartThresholdW', 1400);
+        $this->RegisterPropertyInteger('StopThresholdW',  -300);
+        $this->RegisterPropertyInteger('MinOn_s',           90);
+        $this->RegisterPropertyInteger('MinOff_s',          90);
+        $this->RegisterPropertyInteger('DeficitBufferWh',   40);
 
-    // --- Profile ---
-    $this->ensureProfiles(); // stellt u. a. PVWM.Mode, PVWM.FRC, PVWM.Phasen, GoE.Amp bereit
+        // --- Profile ---
+        $this->ensureProfiles();
 
-    // Profil: 0..30 Tage zurück
-    if (!IPS_VariableProfileExists('PVWM.DaysBack')) {
-        IPS_CreateVariableProfile('PVWM.DaysBack', 1);               // Integer
-        IPS_SetVariableProfileValues('PVWM.DaysBack', 0, 30, 1);
-        IPS_SetVariableProfileText('PVWM.DaysBack', '', ' d');
+        if (!IPS_VariableProfileExists('PVWM.DaysBack')) {
+            IPS_CreateVariableProfile('PVWM.DaysBack', 1);
+            IPS_SetVariableProfileValues('PVWM.DaysBack', 0, 30, 1);
+            IPS_SetVariableProfileText('PVWM.DaysBack', '', ' d');
+        }
+        $this->RegisterAttributeInteger('LastChartUpdateMs', 0);
+        $this->RegisterVariableInteger('ChartDaysBack', 'Chart: Tage zurück', 'PVWM.DaysBack', 890);
+        $this->EnableAction('ChartDaysBack');
+
+        // --- Kern-Variablen (WebFront) ---
+        $this->RegisterVariableInteger('Mode', 'Lademodus', 'PVWM.Mode', 5);
+        $this->EnableAction('Mode');
+
+        $this->RegisterVariableInteger('Ampere_A', 'Ampere [A]', 'GoE.Amp', 10);
+        $this->EnableAction('Ampere_A');
+
+        $this->RegisterVariableInteger('PowerToCar_W', 'Ladeleistung [W]', '~Watt', 20);
+        $this->RegisterVariableInteger('HouseNet_W',   'Hausverbrauch (ohne WB) [W]', '~Watt', 21);
+        $this->RegisterVariableInteger('CarState',     'Fahrzeugstatus', 'GoE.CarState', 25);
+
+        $this->RegisterVariableInteger('FRC', 'Ladefreigabe-Modus', 'PVWM.FRC', 40);
+        $this->EnableAction('FRC');
+
+        $this->RegisterVariableInteger('Phasenmodus', 'Phasenmodus', 'PVWM.Phasen', 50);
+        $this->EnableAction('Phasenmodus');
+
+        $this->RegisterVariableInteger('Uhrzeit', 'Uhrzeit', '~UnixTimestamp', 70);
+        $this->RegisterVariableString('Regelziel', 'Regelziel', '', 80);
+        $this->RegisterVariableString('Ladechart', 'Ladechart', '~HTMLBox', 900);
+
+        // --- Attribute (einmalig registrieren) ---
+        $this->RegisterAttributeInteger('LastFrcChangeMs', 0);
+        $this->RegisterAttributeInteger('WB_ActivePhases', 1);
+        $this->RegisterAttributeInteger('WB_W_Smooth', 0);
+        $this->RegisterAttributeInteger('WB_SubtractActive', 0);
+        $this->RegisterAttributeInteger('WB_SubtractChangedMs', 0);
+
+        $this->RegisterAttributeInteger('CntStart', 0);
+        $this->RegisterAttributeInteger('CntStop', 0);
+        $this->RegisterAttributeInteger('CntTo1p', 0);
+        $this->RegisterAttributeInteger('CntTo3p', 0);
+        $this->RegisterAttributeInteger('LastAmpSet', 0);
+        $this->RegisterAttributeInteger('LastPublishMs', 0);
+        $this->RegisterAttributeInteger('LastPhaseMode', 0);
+        $this->RegisterAttributeInteger('LastPhaseSwitchMs', 0);
+        $this->RegisterAttributeInteger('SlowSurplusW', 0);
+        $this->RegisterAttributeInteger('SmoothSurplusW', 0);
+        $this->RegisterAttributeInteger('LastAmpChangeMs', 0);
+        $this->RegisterAttributeInteger('Slow_LastCalcA', 0);
+        $this->RegisterAttributeInteger('Slow_TargetW', 0);
+
+        $this->RegisterAttributeInteger('Slow_SurplusRaw', 0);
+        $this->RegisterAttributeInteger('Slow_AboveStartMs', 0);
+        $this->RegisterAttributeInteger('Slow_BelowStopMs', 0);
+
+        $this->RegisterAttributeInteger('LastCarState', 0);
+        $this->RegisterAttributeInteger('Phase_Above3pMs', 0);
+        $this->RegisterAttributeInteger('Phase_Below1pMs', 0);
+
+        $this->RegisterAttributeInteger('PendingPhaseMode', 0);
+        $this->RegisterAttributeInteger('PhaseSwitchState', 0);
+
+        // Anti-Flackern: Konto + Zeitbasis
+        $this->RegisterAttributeInteger('LastBankTsMs', 0);
+        $this->RegisterAttributeFloat('DeficitBankWh', 0.0);
+
+        // --- Timer ---
+        $this->RegisterTimer('LOOP', 0, $this->modulePrefix().'_Loop($_IPS["TARGET"]);');
+        $this->RegisterTimer('SLOW_TickUI', 0, 'IPS_RequestAction($_IPS["TARGET"], "DoSlowTickUI", 0);');
+        $this->RegisterTimer('SLOW_TickControl', 0, 'IPS_RequestAction($_IPS["TARGET"], "DoSlowTickControl", 0);');
     }
-    $this->RegisterAttributeInteger('LastChartUpdateMs', 0);
-    $this->RegisterVariableInteger('ChartDaysBack', 'Chart: Tage zurück', 'PVWM.DaysBack', 890);
-    $this->EnableAction('ChartDaysBack');
-
-    // --- Kern-Variablen (WebFront) ---
-    // 0=PV-Automatik, 1=Manuell (fix), 2=Nur Anzeige
-    $this->RegisterVariableInteger('Mode', 'Lademodus', 'PVWM.Mode', 5);
-    $this->EnableAction('Mode');
-
-    $this->RegisterVariableInteger('Ampere_A', 'Ampere [A]', 'GoE.Amp', 10);
-    $this->EnableAction('Ampere_A');
-
-    // Ladeleistung zum Fahrzeug
-    $this->RegisterVariableInteger('PowerToCar_W', 'Ladeleistung [W]', '~Watt', 20);
-
-    $this->RegisterVariableInteger('HouseNet_W', 'Hausverbrauch (ohne WB) [W]', '~Watt', 21);
-
-    $this->RegisterVariableInteger('CarState', 'Fahrzeugstatus', 'GoE.CarState', 25);
-
-    // FRC deutsch beschriftet
-    $this->RegisterVariableInteger('FRC', 'Ladefreigabe-Modus', 'PVWM.FRC', 40);
-    $this->EnableAction('FRC');
-
-    // 1=1p, 3=3p
-    $this->RegisterVariableInteger('Phasenmodus', 'Phasenmodus', 'PVWM.Phasen', 50);
-    $this->EnableAction('Phasenmodus');
-
-    $this->RegisterVariableInteger('Uhrzeit', 'Uhrzeit', '~UnixTimestamp', 70);
-
-    // Kompakte Zielanzeige (ersetzt einzelne Ziel-Variablen)
-    $this->RegisterVariableString('Regelziel', 'Regelziel', '', 80);
-
-    $this->RegisterVariableString('Ladechart', 'Ladechart', '~HTMLBox', 900);
-
-    // --- Altlasten entfernen / migrieren ---
-    @ $this->UnregisterVariable('SlowControlActive');     // „Slow-Regler aktiv“ entfällt
-    @ $this->UnregisterVariable('TargetA_Live');          // ersetzt durch Regelziel
-    @ $this->UnregisterVariable('TargetW_Live');          // ersetzt durch Regelziel
-    @ $this->UnregisterVariable('TargetPhaseAmp');        // ersetzt durch Regelziel
-    @ $this->UnregisterVariable('Leistung_W');            // durch PowerToCar_W ersetzt
-
-    // --- Attribute ---
-    $this->RegisterAttributeInteger('LastFrcChangeMs', 0);
-    $this->RegisterAttributeInteger('WB_ActivePhases', 1);
-    $this->RegisterAttributeInteger('WB_W_Smooth', 0);
-    $this->RegisterAttributeInteger('WB_SubtractActive', 0);
-    $this->RegisterAttributeInteger('WB_SubtractChangedMs', 0);
-
-    $this->RegisterAttributeInteger('CntStart', 0);
-    $this->RegisterAttributeInteger('CntStop', 0);
-    $this->RegisterAttributeInteger('CntTo1p', 0);
-    $this->RegisterAttributeInteger('CntTo3p', 0);
-    $this->RegisterAttributeInteger('LastAmpSet', 0);
-    $this->RegisterAttributeInteger('LastPublishMs', 0);
-    $this->RegisterAttributeInteger('LastPhaseMode', 0);
-    $this->RegisterAttributeInteger('LastPhaseSwitchMs', 0);
-    $this->RegisterAttributeInteger('SlowSurplusW', 0);
-    $this->RegisterAttributeInteger('SmoothSurplusW', 0);
-    $this->RegisterAttributeInteger('LastAmpChangeMs', 0);
-    $this->RegisterAttributeInteger('Slow_LastCalcA', 0);
-    $this->RegisterAttributeInteger('Slow_TargetW', 0);
-
-    $this->RegisterAttributeInteger('Slow_SurplusRaw', 0);
-    $this->RegisterAttributeInteger('Slow_AboveStartMs', 0);
-    $this->RegisterAttributeInteger('Slow_BelowStopMs', 0);
-
-    $this->RegisterAttributeInteger('LastCarState', 0);
-    $this->RegisterAttributeInteger('Phase_Above3pMs', 0);
-    $this->RegisterAttributeInteger('Phase_Below1pMs', 0);
-
-    $this->RegisterAttributeInteger('PendingPhaseMode', 0);   // 0=none, 1|3 Ziel
-    $this->RegisterAttributeInteger('PhaseSwitchState', 0);   // 0 idle,1 stop,2 set,3 start
-
-    // --- Timer ---
-    $this->RegisterTimer('LOOP', 0, $this->modulePrefix().'_Loop($_IPS["TARGET"]);');
-    $this->RegisterTimer('SLOW_TickUI', 0, 'IPS_RequestAction($_IPS["TARGET"], "DoSlowTickUI", 0);');
-    $this->RegisterTimer('SLOW_TickControl', 0, 'IPS_RequestAction($_IPS["TARGET"], "DoSlowTickControl", 0);');
-}
-
 
     public function ApplyChanges()
     {
@@ -271,8 +258,7 @@ public function Create()
                 if ($connected) {
                     $this->setCurrentLimitA($a);
                     if ((int)@GetValue(@$this->GetIDForIdent('FRC')) !== 2) {
-                        $this->sendSet('frc', '2');
-                        @SetValue(@$this->GetIDForIdent('FRC'), 2);
+                        $this->setFRC(2, 'UI: Ampere_A');
                     }
                     $nowMs = (int)(microtime(true) * 1000);
                     $this->WriteAttributeInteger('LastAmpSet',    $a);
@@ -318,8 +304,7 @@ public function Create()
 
             case 'FRC':
                 $frc = in_array((int)$Value, [0,1,2], true) ? (int)$Value : 0;
-                $this->SetValueSafe('FRC', $frc);
-                $this->sendSet('frc', (string)$frc);
+                $this->setFRC($frc, 'UI');
                 $this->renderChartIfDue(1500);
                 return;
 
@@ -418,7 +403,7 @@ public function Create()
         $battForCalc = ($connected && $batSoc >= 0 && $batSoc >= $minSoc) ? 0 : $battCharge;
 
         // Überschuss + EMA
-        $surplusRaw = max(0, $pv - $battForCalc - $houseTotal + $wbW);
+        $surplusRaw = $pv - $battForCalc - $houseTotal + $wbW;
         $alpha   = min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0));
         $emaPrev = (int)$this->ReadAttributeInteger('SlowSurplusW');
         $ema     = (int)round($alpha*$surplusRaw + (1.0-$alpha)*$emaPrev);
@@ -508,7 +493,7 @@ public function Create()
         // ===== MANUELL (fix) =====
         if ($mode === 1) {
             if (!$connected) { // neutral warten
-                if ($frc !== 0) { $this->sendSet('frc','0'); @SetValue(@$this->GetIDForIdent('FRC'),0); }
+                if ($frc !== 0) { $this->setFRC(0, 'manuell: nicht verbunden'); }
                 return;
             }
 
@@ -521,7 +506,7 @@ public function Create()
             if ($pend !== 0) {
                 switch ($pstate) {
                     case 0: // Stop
-                        if ($frc !== 1) { $this->sendSet('frc','1'); @SetValue(@$this->GetIDForIdent('FRC'),1); }
+                        if ($frc !== 1) { $this->setFRC(1, 'phase switch stop'); }
                         $this->WriteAttributeInteger('PhaseSwitchState', 1);
                         $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
                         return;
@@ -536,7 +521,7 @@ public function Create()
 
                     case 2: // wieder starten
                         if ($nowMs - $tmark >= 1200) {
-                            $this->sendSet('frc','2'); @SetValue(@$this->GetIDForIdent('FRC'),2);
+                            $this->setFRC(2, 'phase switch start');
                             $this->WriteAttributeInteger('PhaseSwitchState', 3);
                             $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
                         }
@@ -563,7 +548,7 @@ public function Create()
 
             $this->sendSet('psm', ($pmUi===3)?'2':'1');
             $this->setCurrentLimitA($aSel);
-            if ($frc !== 2) { $this->sendSet('frc','2'); @SetValue(@$this->GetIDForIdent('FRC'),2); }
+            if ($frc !== 2) { $this->setFRC(2, 'manuell halten'); }
             if ($vidA=@$this->GetIDForIdent('Ampere_A')) @SetValue($vidA, $aSel);
             $this->WriteAttributeInteger('LastAmpSet',    $aSel);
             $this->WriteAttributeInteger('LastPublishMs', $nowMs);
@@ -580,38 +565,21 @@ public function Create()
         $minSoc   = (int)$this->ReadPropertyInteger('BatteryMinSocForPV');
         if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
 
-        // STOP
+        // STOP: nicht verbunden oder Ziel zu klein -> neutral
         if (!$connected || $targetW < $minTargetW) {
-            $targetFrc = 0; // neutral warten
-            if ($frc !== $targetFrc) {
-                $this->sendSet('frc', (string)$targetFrc);
-                if ($vid=@$this->GetIDForIdent('FRC')) @SetValue($vid, $targetFrc);
-            }
+            if ($frc !== 0) { $this->setFRC(0, 'pv: ziel zu klein/kein auto'); }
             return;
         }
 
-        // START
-        if ($frc !== 2 && ($nowMs - $lastPub) >= $gapMs) {
-            [$pmPlan, /*$aPlan*/] = $this->targetPhaseAmp($targetW); // pm: 1|3
-            $U         = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
-            $phEffAttr = (int)$this->ReadAttributeInteger('WB_ActivePhases');   // 1/2/3 (aus NRG)
-            $phForCalc = ($phEffAttr === 2) ? 2 : (($pmPlan === 3) ? 3 : 1);    // 2-phasig bevorzugen
-            $minA      = (int)$this->ReadPropertyInteger('MinAmp');
-            $maxA      = (int)$this->ReadPropertyInteger('MaxAmp');
-            $aStart    = (int)ceil($targetW / ($U * max(1,$phForCalc)));
-            $aStart    = min($maxA, max($minA, $aStart));
-            $psmWanted = ($phForCalc >= 2) ? '2' : '1';
+        // Anti-Flackern: nur wenn kein Phasenwechsel läuft
+        $phaseSwitchActive = ((int)$this->ReadAttributeInteger('PhaseSwitchState') !== 0);
+        if (!$phaseSwitchActive) {
+            $pvSurplusW = (int)$this->calcPvUeberschussW();
+            $this->ApplyAntiFlackerLogic($pvSurplusW); // entscheidet ausschließlich über FRC 1/2
+            $frc = (int)@GetValue(@$this->GetIDForIdent('FRC')); // aktualisieren
+        }
 
-            $this->sendSet('psm', $psmWanted);
-            $this->setCurrentLimitA($aStart);
-            $this->sendSet('frc', '2');
-            if ($vidA=@$this->GetIDForIdent('Ampere_A')) @SetValue($vidA, $aStart);
-            $this->WriteAttributeInteger('LastAmpSet',    $aStart);
-            $this->WriteAttributeInteger('LastPublishMs', $nowMs);
-            return;
-        } // <-- fehlende Klammer war hier
-
-        // FRC nicht frei / Timing nicht ok
+        // Wenn FRC nicht frei oder Publish-Sperre aktiv -> raus
         if ($frc !== 2 || ($nowMs - $lastPub) < $gapMs) { $this->WriteAttributeInteger('LastCarState', $car); return; }
         if (!$connected) { $this->WriteAttributeInteger('LastCarState', $car); return; }
 
@@ -706,116 +674,201 @@ public function Create()
         }
     }
 
+    private function ApplyAntiFlackerLogic(int $pvSurplusW): void
+    {
+        $StartW   = (int)($this->ReadPropertyInteger('StartThresholdW') ?: 1400);
+        $StopW    = (int)($this->ReadPropertyInteger('StopThresholdW')  ?: -300);
+        $MinOn_s  = (int)($this->ReadPropertyInteger('MinOn_s') ?: max(1, (int)round(($this->ReadPropertyInteger('MinOnTimeMs')  ?: 60000)/1000)));
+        $MinOff_s = (int)($this->ReadPropertyInteger('MinOff_s')?: max(1, (int)round(($this->ReadPropertyInteger('MinOffTimeMs') ?: 15000)/1000)));
+        $BufferWh = (int)($this->ReadPropertyInteger('DeficitBufferWh') ?: 40);
+
+        $nowMs      = (int)(microtime(true) * 1000);
+        $lastChange = (int)$this->ReadAttributeInteger('LastFrcChangeMs');
+        $since_s    = max(0.0, ($nowMs - $lastChange) / 1000.0);
+
+        // Energiekonto
+        $kontoWh = (float)$this->ReadAttributeFloat('DeficitBankWh');
+        $lastTs  = (int)$this->ReadAttributeInteger('LastBankTsMs');
+        if ($lastTs <= 0) $lastTs = $nowMs;
+        $dt_h = max(0.001, ($nowMs - $lastTs) / 3600000.0);
+        $kontoWh += (-$pvSurplusW) * $dt_h; // Defizit positiv
+        $maxWh = max(2*$BufferWh, 200.0);
+        if ($kontoWh >  $maxWh) $kontoWh =  $maxWh;
+        if ($kontoWh < -$maxWh) $kontoWh = -$maxWh;
+        $this->WriteAttributeFloat('DeficitBankWh', $kontoWh);
+        $this->WriteAttributeInteger('LastBankTsMs', $nowMs);
+
+        // Ist
+        $frcVid = @$this->GetIDForIdent('FRC');
+        $frcIst = $frcVid ? (int)@GetValue($frcVid) : 1;
+        if ($frcIst < 1 || $frcIst > 2) $frcIst = 1;
+
+        // Entscheidung
+        if ($frcIst !== 2) {
+            if ($pvSurplusW >= $StartW && $kontoWh <= -$BufferWh && $since_s >= $MinOff_s) {
+                $this->setFRC(2, sprintf('AF: Start (PV=%d, Bank=%.1f)', $pvSurplusW, $kontoWh));
+            }
+        } else {
+            if ($pvSurplusW <= $StopW && $kontoWh >= $BufferWh && $since_s >= $MinOn_s) {
+                $this->setFRC(1, sprintf('AF: Stop (PV=%d, Bank=%.1f)', $pvSurplusW, $kontoWh));
+            }
+        }
+    }
+
+    private function setFRC(int $frc, string $reason = ''): void
+    {
+        $frc = in_array($frc, [0,1,2], true) ? $frc : 0;
+
+        $vid = @$this->GetIDForIdent('FRC');
+        $cur = $vid ? (int)@GetValue($vid) : -1;
+        if ($cur === $frc) return;
+
+        $this->sendSet('frc', (string)$frc);
+        if ($vid) @SetValue($vid, $frc);
+
+        $nowMs = (int)(microtime(true) * 1000);
+        $this->WriteAttributeInteger('LastFrcChangeMs', $nowMs);
+
+        if (method_exists($this, 'dbgLog')) {
+            $this->dbgLog('FRC', sprintf('Set → %d (%s)', $frc, $reason));
+        }
+    }
+
     // -------------------------
     // Form
     // -------------------------
-public function GetConfigurationForm()
-{
-    $U    = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
-    $minA = (int)$this->ReadPropertyInteger('MinAmp');
-    $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
-    $thr3 = 3 * max(1, $minA) * $U;
-    $thr1 = max(1, $maxA) * $U;
-    $msHint = '⏱ 1 000 ms = 1 s · 10 000 ms = 10 s · 30 000 ms = 30 s';
+    public function GetConfigurationForm()
+    {
+        $U    = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
+        $minA = (int)$this->ReadPropertyInteger('MinAmp');
+        $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
+        $thr3 = 3 * max(1, $minA) * $U;
+        $thr1 = max(1, $maxA) * $U;
+        $msHint = '⏱ 1 000 ms = 1 s · 10 000 ms = 10 s · 30 000 ms = 30 s';
 
-    return json_encode([
-        'elements' => [
-            [
-                'type'    => 'ExpansionPanel',
-                'caption' => '🔌 Wallbox',
-                'items'   => [
-                    ['type' => 'ValidationTextBox', 'name' => 'BaseTopic',      'caption' => 'Base-Topic (go-eCharger/285450)'],
-                    ['type' => 'ValidationTextBox', 'name' => 'DeviceIDFilter', 'caption' => 'Device-ID Filter (optional)'],
-                    [
-                        'type'  => 'RowLayout',
-                        'items' => [
-                            ['type' => 'NumberSpinner', 'name' => 'MinAmp',      'caption' => 'Min. Ampere', 'minimum' => 1,   'maximum' => 32,  'suffix' => ' A'],
-                            ['type' => 'NumberSpinner', 'name' => 'MaxAmp',      'caption' => 'Max. Ampere', 'minimum' => 1,   'maximum' => 32,  'suffix' => ' A'],
-                            ['type' => 'NumberSpinner', 'name' => 'NominalVolt', 'caption' => 'Netzspannung','minimum' => 200, 'maximum' => 245, 'suffix' => ' V'],
-                        ]
-                    ],
-                    ['type' => 'Label', 'caption' => "⚙️ Richtwerte: 3P Start ≈ {$thr3} W · 1P unter ≈ {$thr1} W"],
-                ]
-            ],
-            [
-                'type'    => 'ExpansionPanel',
-                'caption' => '⚡ Eingänge',
-                'items'   => [
-                    ['type' => 'SelectVariable', 'name' => 'VarPV_ID',     'caption' => 'PV-Leistung'],
-                    ['type' => 'SelectVariable', 'name' => 'VarHouse_ID',  'caption' => 'Haus gesamt (inkl. WB)'],
-                    ['type' => 'SelectVariable', 'name' => 'VarBattery_ID','caption' => 'Batterie (optional)'],
-                    [
-                        'type'  => 'RowLayout',
-                        'items' => [
-                            ['type' => 'Select', 'name' => 'VarPV_Unit',     'caption' => 'PV Einheit',   'options' => [['caption' => 'W','value' => 'W'],   ['caption' => 'kW','value' => 'kW']]],
-                            ['type' => 'Select', 'name' => 'VarHouse_Unit',  'caption' => 'Haus Einheit', 'options' => [['caption' => 'W','value' => 'W'],   ['caption' => 'kW','value' => 'kW']]],
-                            ['type' => 'Select', 'name' => 'VarBattery_Unit','caption' => 'Batt Einheit', 'options' => [['caption' => 'W','value' => 'W'],   ['caption' => 'kW','value' => 'kW']]],
-                        ]
-                    ],
-                    ['type' => 'CheckBox',      'name' => 'BatteryPositiveIsCharge', 'caption' => '+ bedeutet Laden'],
-                    ['type' => 'NumberSpinner', 'name' => 'WBSubtractMinW',          'caption' => 'WB-Abzug ab', 'suffix' => ' W'],
-                    ['type' => 'Label',         'caption' => 'WB-Leistung erst ab diesem Wert vom Hausverbrauch abziehen.'],
-                ]
-            ],
-            [
-                'type'    => 'ExpansionPanel',
-                'caption' => '🔋 Intelligente Batterie-Logik (PV zuerst Akku, dann Auto)',
-                'items'   => [
-                    [
-                        'type'       => 'SelectVariable',
-                        'name'       => 'VarBatterySoc_ID',
-                        'caption'    => 'Batterie-SoC Variable [%]',
-                        'validTypes' => [1, 2], // Integer/Float
-                        'required'   => false,
-                        'width'      => '600px'
-                    ],
-                    [
-                        'type'    => 'NumberSpinner',
-                        'name'    => 'BatteryMinSocForPV',
-                        'caption' => 'Mindest-SoC bevor Auto laden darf',
-                        'minimum' => 0,
-                        'maximum' => 100,
-                        'suffix'  => ' %',
-                        'width'   => '200px'
-                    ],
-                    [
-                        'type'    => 'NumberSpinner',
-                        'name'    => 'BatteryReserveW',
-                        'caption' => 'Haus-/Akku-Reserve',
-                        'minimum' => 0,
-                        'maximum' => 10000,
-                        'suffix'  => ' W',
-                        'width'   => '200px'
-                    ],
-                    [
-                        'type'    => 'Label',
-                        'caption' => 'Erlaubt Laden nur wenn SoC ≥ Mindest-SoC. ReserveW wird vom PV-Überschuss abgezogen.'
+        return json_encode([
+            'elements' => [
+                [
+                    'type'    => 'ExpansionPanel',
+                    'caption' => '🔌 Wallbox',
+                    'items'   => [
+                        ['type' => 'ValidationTextBox', 'name' => 'BaseTopic',      'caption' => 'Base-Topic (go-eCharger/285450)'],
+                        ['type' => 'ValidationTextBox', 'name' => 'DeviceIDFilter', 'caption' => 'Device-ID Filter (optional)'],
+                        [
+                            'type'  => 'RowLayout',
+                            'items' => [
+                                ['type' => 'NumberSpinner', 'name' => 'MinAmp',      'caption' => 'Min. Ampere', 'minimum' => 1,   'maximum' => 32,  'suffix' => ' A'],
+                                ['type' => 'NumberSpinner', 'name' => 'MaxAmp',      'caption' => 'Max. Ampere', 'minimum' => 1,   'maximum' => 32,  'suffix' => ' A'],
+                                ['type' => 'NumberSpinner', 'name' => 'NominalVolt', 'caption' => 'Netzspannung','minimum' => 200, 'maximum' => 245, 'suffix' => ' V'],
+                            ]
+                        ],
+                        ['type' => 'Label', 'caption' => "⚙️ Richtwerte: 3P Start ≈ {$thr3} W · 1P unter ≈ {$thr1} W"],
                     ]
-                ]
+                ],
+                [
+                    'type'    => 'ExpansionPanel',
+                    'caption' => '⚡ Eingänge',
+                    'items'   => [
+                        ['type' => 'SelectVariable', 'name' => 'VarPV_ID',     'caption' => 'PV-Leistung'],
+                        ['type' => 'SelectVariable', 'name' => 'VarHouse_ID',  'caption' => 'Haus gesamt (inkl. WB)'],
+                        ['type' => 'SelectVariable', 'name' => 'VarBattery_ID','caption' => 'Batterie (optional)'],
+                        [
+                            'type'  => 'RowLayout',
+                            'items' => [
+                                ['type' => 'Select', 'name' => 'VarPV_Unit',     'caption' => 'PV Einheit',   'options' => [['caption' => 'W','value' => 'W'], ['caption' => 'kW','value' => 'kW']]],
+                                ['type' => 'Select', 'name' => 'VarHouse_Unit',  'caption' => 'Haus Einheit', 'options' => [['caption' => 'W','value' => 'W'], ['caption' => 'kW','value' => 'kW']]],
+                                ['type' => 'Select', 'name' => 'VarBattery_Unit','caption' => 'Batt Einheit', 'options' => [['caption' => 'W','value' => 'W'], ['caption' => 'kW','value' => 'kW']]],
+                            ]
+                        ],
+                        ['type' => 'CheckBox',      'name' => 'BatteryPositiveIsCharge', 'caption' => '+ bedeutet Laden'],
+                        ['type' => 'NumberSpinner', 'name' => 'WBSubtractMinW',          'caption' => 'WB-Abzug ab', 'suffix' => ' W'],
+                        ['type' => 'Label',         'caption' => 'WB-Leistung erst ab diesem Wert vom Hausverbrauch abziehen.'],
+                    ]
+                ],
+                [
+                    'type'    => 'ExpansionPanel',
+                    'caption' => '🔋 Intelligente Batterie-Logik (PV zuerst Akku, dann Auto)',
+                    'items'   => [
+                        [
+                            'type'       => 'SelectVariable',
+                            'name'       => 'VarBatterySoc_ID',
+                            'caption'    => 'Batterie-SoC Variable [%]',
+                            'validTypes' => [1, 2],
+                            'required'   => false,
+                            'width'      => '600px'
+                        ],
+                        [
+                            'type'    => 'NumberSpinner',
+                            'name'    => 'BatteryMinSocForPV',
+                            'caption' => 'Mindest-SoC bevor Auto laden darf',
+                            'minimum' => 0,
+                            'maximum' => 100,
+                            'suffix'  => ' %',
+                            'width'   => '200px'
+                        ],
+                        [
+                            'type'    => 'NumberSpinner',
+                            'name'    => 'BatteryReserveW',
+                            'caption' => 'Haus-/Akku-Reserve',
+                            'minimum' => 0,
+                            'maximum' => 10000,
+                            'suffix'  => ' W',
+                            'width'   => '200px'
+                        ],
+                        [
+                            'type'    => 'Label',
+                            'caption' => 'Erlaubt Laden nur wenn SoC ≥ Mindest-SoC. ReserveW wird vom PV-Überschuss abgezogen.'
+                        ]
+                    ]
+                ],
+                [
+                    'type'    => 'ExpansionPanel',
+                    'caption' => '🐢 Slow-Control',
+                    'items'   => [
+                        ['type' => 'CheckBox',      'name' => 'SlowControlEnabled',  'caption' => 'aktiv'],
+                        ['type' => 'NumberSpinner', 'name' => 'ControlIntervalSec',  'caption' => 'Regelintervall', 'minimum' => 10, 'maximum' => 30,  'suffix' => ' s'],
+                        ['type' => 'NumberSpinner', 'name' => 'SlowAlphaPermille',   'caption' => 'Glättung α',     'minimum' => 0,  'maximum' => 1000,'suffix' => ' ‰'],
+                        ['type' => 'Label',         'caption' => 'Anzeige 1 Hz live. Regelung ±1 A pro Intervall.'],
+                    ]
+                ],
+                [
+                    'type'    => 'ExpansionPanel',
+                    'caption' => '🧯 Anti-Flackern',
+                    'items'   => [
+                        ['type' => 'Label', 'caption' => '↕ Hysterese: Start bei Überschuss ≥ Start, Stop erst bei ≤ Stop.'],
+                        [
+                            'type'  => 'RowLayout',
+                            'items' => [
+                                ['type' => 'NumberSpinner', 'name' => 'StartThresholdW','caption' => 'Start-Schwelle','minimum' => -10000,'maximum' => 20000,'suffix' => ' W'],
+                                ['type' => 'NumberSpinner', 'name' => 'StopThresholdW', 'caption' => 'Stop-Schwelle', 'minimum' => -10000,'maximum' => 20000,'suffix' => ' W'],
+                            ]
+                        ],
+                        ['type' => 'Label', 'caption' => '⏱ Mindestlaufzeiten verhindern Ping-Pong.'],
+                        [
+                            'type'  => 'RowLayout',
+                            'items' => [
+                                ['type' => 'NumberSpinner', 'name' => 'MinOn_s', 'caption' => 'Mindest-Ein', 'minimum' => 0, 'maximum' => 3600, 'suffix' => ' s'],
+                                ['type' => 'NumberSpinner', 'name' => 'MinOff_s','caption' => 'Mindest-Aus', 'minimum' => 0, 'maximum' => 3600, 'suffix' => ' s'],
+                            ]
+                        ],
+                        ['type' => 'Label', 'caption' => '⚡ Energiekonto: kurze Defizite puffern.'],
+                        ['type' => 'NumberSpinner', 'name' => 'DeficitBufferWh','caption' => 'Defizit-Puffer','minimum' => 0,'maximum' => 2000,'suffix' => ' Wh'],
+                    ]
+                ],
+                [
+                    'type'    => 'ExpansionPanel',
+                    'caption' => '🪲 Debug',
+                    'items'   => [
+                        ['type' => 'CheckBox', 'name' => 'DebugPVWM', 'caption' => 'Modul-Debug (Regellogik)'],
+                        ['type' => 'CheckBox', 'name' => 'DebugMQTT', 'caption' => 'MQTT-Rohdaten loggen'],
+                        ['type' => 'Label',    'caption' => 'Ausgabe im Meldungen-Fenster.'],
+                    ]
+                ],
             ],
-            [
-                'type'    => 'ExpansionPanel',
-                'caption' => '🐢 Slow-Control',
-                'items'   => [
-                    ['type' => 'CheckBox',      'name' => 'SlowControlEnabled',  'caption' => 'aktiv'],
-                    ['type' => 'NumberSpinner', 'name' => 'ControlIntervalSec',  'caption' => 'Regelintervall', 'minimum' => 10, 'maximum' => 30,  'suffix' => ' s'],
-                    ['type' => 'NumberSpinner', 'name' => 'SlowAlphaPermille',   'caption' => 'Glättung α',     'minimum' => 0,  'maximum' => 1000,'suffix' => ' ‰'],
-                    ['type' => 'Label',         'caption' => 'Anzeige 1 Hz live. Regelung ±1 A pro Intervall.'],
-                ]
-            ],
-            [
-                'type'    => 'ExpansionPanel',
-                'caption' => '🪲 Debug',
-                'items'   => [
-                    ['type' => 'CheckBox', 'name' => 'DebugPVWM', 'caption' => 'Modul-Debug (Regellogik)'],
-                    ['type' => 'CheckBox', 'name' => 'DebugMQTT', 'caption' => 'MQTT-Rohdaten loggen'],
-                    ['type' => 'Label',    'caption' => 'Ausgabe im Meldungen-Fenster.'],
-                ]
-            ],
-        ],
-        'actions' => [
-            ['type' => 'Label', 'caption' => $msHint]
-        ]
-    ], JSON_UNESCAPED_UNICODE);
-}
+            'actions' => [
+                ['type' => 'Label', 'caption' => $msHint]
+            ]
+        ], JSON_UNESCAPED_UNICODE);
+    }
+
 }
