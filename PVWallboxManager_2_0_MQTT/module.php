@@ -80,15 +80,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         // --- Profile ---
         $this->ensureProfiles();
 
-        if (!IPS_VariableProfileExists('PVWM.DaysBack')) {
-            IPS_CreateVariableProfile('PVWM.DaysBack', 1);
-            IPS_SetVariableProfileValues('PVWM.DaysBack', 0, 30, 1);
-            IPS_SetVariableProfileText('PVWM.DaysBack', '', ' d');
-        }
-        $this->RegisterAttributeInteger('LastChartUpdateMs', 0);
-        $this->RegisterVariableInteger('ChartDaysBack', 'Chart: Tage zurück', 'PVWM.DaysBack', 890);
-        $this->EnableAction('ChartDaysBack');
-
         // --- Kern-Variablen (WebFront) ---
         $this->RegisterVariableInteger('Mode', 'Lademodus', 'PVWM.Mode', 5);
         $this->EnableAction('Mode');
@@ -119,7 +110,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         $this->RegisterVariableInteger('Uhrzeit', 'Uhrzeit', '~UnixTimestamp', 70);
         $this->RegisterVariableString('Regelziel', 'Regelziel', '', 80);
-        $this->RegisterVariableString('Ladechart', 'Ladechart', '~HTMLBox', 900);
+//        $this->RegisterVariableString('Ladechart', 'Ladechart', '~HTMLBox', 900);
 
         // --- Attribute (einmalig registrieren) ---
         $this->RegisterAttributeInteger('LastFrcChangeMs', 0);
@@ -256,7 +247,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             case 'Mode':
                 $this->SetValueSafe('Mode', in_array((int)$Value, [0,1,2,3], true) ? (int)$Value : 0);
                 $this->updateUiInteractivity();
-                $this->renderChartIfDue(1500);
                 return;
 
             case 'Ampere_A': {
@@ -264,7 +254,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                     $cur = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
                     $this->SetValueSafe('Ampere_A', $cur); // UI zurück
                     $this->SendDebug('UI', 'Amp ignoriert: nicht Manuell', 0);
-                    $this->renderChartIfDue(1500);
                     return;
                 }
 
@@ -284,7 +273,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                     $this->WriteAttributeInteger('LastAmpSet',    $a);
                     $this->WriteAttributeInteger('LastPublishMs', $nowMs);
                 }
-                $this->renderChartIfDue(1500);
                 return;
             }
 
@@ -293,13 +281,12 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                     $cur = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus'));
                     $this->SetValueSafe('Phasenmodus', $cur); // UI zurück
                     $this->SendDebug('UI', 'Phase ignoriert: nicht Manuell', 0);
-                    $this->renderChartIfDue(1500);
                     return;
                 }
 
                 $pm  = ((int)$Value === 3) ? 3 : 1;
                 $old = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus'));
-                if ($pm === $old) { $this->renderChartIfDue(1500); return; }
+                if ($pm === $old) { return; }
 
                 $this->SetValueSafe('Phasenmodus', $pm);
 
@@ -309,7 +296,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                     $this->WriteAttributeInteger('PendingPhaseMode', $pm);
                     $this->WriteAttributeInteger('PhaseSwitchState', 0);
                     $this->WriteAttributeInteger('LastPhaseSwitchMs', (int)(microtime(true) * 1000));
-                    $this->renderChartIfDue(1500);
                     return;
                 }
 
@@ -318,30 +304,17 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 $nowMs = (int)(microtime(true) * 1000);
                 $this->WriteAttributeInteger('LastPhaseMode', $pm);
                 $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
-                $this->renderChartIfDue(1500);
                 return;
             }
 
             case 'FRC':
                 $frc = in_array((int)$Value, [0,1,2], true) ? (int)$Value : 0;
                 $this->setFRC($frc, 'UI');
-                $this->renderChartIfDue(1500);
                 return;
 
-            case 'RenderLadechart':
-                $this->renderChartIfDue(1500); // sofort, ohne Timer
-                return;
-
-            case 'ChartDaysBack':
-                $v = max(0, min(30, (int)$Value));
-                $this->SetValueSafe('ChartDaysBack', $v);
-                $this->RenderLadechart(); // direkt neu zeichnen
-                return;
-            
             case 'PVShare_Pct':
                 $pct = max(0, min(100, (int)$Value));
                 $this->SetValueSafe('PVShare_Pct', $pct);
-                $this->renderChartIfDue(1500);
                 return;
         }
         throw new Exception("Invalid Ident $Ident");

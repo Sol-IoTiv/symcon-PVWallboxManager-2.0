@@ -318,132 +318,42 @@ trait Helpers
 
     private function updateUiInteractivity(): void
     {
-        $manual = $this->isManualMode();
-        $ro = !$manual;
-        $this->setVarReadOnly('Ampere_A',    $ro);
-        $this->setVarReadOnly('Phasenmodus', $ro);
+        $mode    = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV,1=Manuell,2=Nur Anzeige,3=PV-Anteil
+        $manual  = $this->isManualMode();                         // i.d.R. ($mode === 1)
+        $share   = ($mode === 3);
+
+        // Manuell: Ampere & Phasen bedienbar, sonst read-only
+        $this->setVarReadOnly('Ampere_A',    !$manual);
+        $this->setVarReadOnly('Phasenmodus', !$manual);
+
+        // PV-Anteil-Slider nur im Modus 3 bedienbar
+        $this->setVarReadOnly('PVShare_Pct', !$share);
     }
 
-// GUID Archiv: {43192F0B-135B-4CE7-A0A7-1475603F3060}
-private function acId(): int
-{
-    $list = @IPS_GetInstanceListByModuleID('{43192F0B-135B-4CE7-A0A7-1475603F3060}');
-    if (is_array($list) && count($list) > 0) return (int)$list[0];
-    return 35472; // Fallback aus deinem Setup
-}
-
-private function seriesLogged(int $vid, int $from, int $to, float $scale = 1.0): array
-{
-    if ($vid <= 0 || !@IPS_VariableExists($vid)) return [];
-    $rows = @AC_GetLoggedValues($this->acId(), $vid, $from, $to, 0);
-    if (!is_array($rows)) return [];
-    $out = [];
-    foreach ($rows as $r) $out[] = [$r['TimeStamp'] * 1000, (float)$r['Value'] * $scale];
-    return $out;
-}
-
-private function unitScale(string $unit): float
-{
-    $u = strtolower(trim($unit));
-    if ($u === 'kw') return 1000.0;
-    return 1.0; // 'w' oder unbekannt
-}
-
-public function RenderLadechart(int $hours = 12): void
-{
-    $daysBack = (int)@GetValue(@$this->GetIDForIdent('ChartDaysBack')); // 0=today, 1=gestern
-    list($from, $to) = $this->dayRangeByOffset($daysBack);
-
-    // Quellen aus Properties
-    $pvID      = (int)$this->ReadPropertyInteger('VarPV_ID');
-    $pvScale   = $this->unitScale($this->ReadPropertyString('VarPV_Unit'));
-
-    $houseProp = (int)$this->ReadPropertyInteger('VarHouse_ID');
-    $houseScale= $this->unitScale($this->ReadPropertyString('VarHouse_Unit'));
-
-    $batID     = (int)$this->ReadPropertyInteger('VarBattery_ID');
-    $batScale  = $this->unitScale($this->ReadPropertyString('VarBattery_Unit'));
-
-    $socID     = (int)$this->ReadPropertyInteger('VarBatterySoc_ID');
-
-    // Modul-Variablen (intern erzeugt)
-    $wbID      = (int)@$this->GetIDForIdent('PowerToCar_W');
-    $houseNet  = (int)@$this->GetIDForIdent('HouseNet_W'); // bevorzugt „ohne WB“
-
-    // Daten holen
-    $pv   = $this->seriesLogged($pvID,   $from, $to, $pvScale);
-    $wb   = $this->seriesLogged($wbID,   $from, $to, 1.0);
-    $soc  = $this->seriesLogged($socID,  $from, $to, 1.0);
-
-    // Haus: nimm HouseNet_W wenn vorhanden, sonst Property
-    $haus = $this->seriesLogged($houseNet ?: 0, $from, $to, 1.0);
-    if (count($haus) === 0 && $houseProp > 0) {
-        $haus = $this->seriesLogged($houseProp, $from, $to, $houseScale);
+    // GUID Archiv: {43192F0B-135B-4CE7-A0A7-1475603F3060}
+    private function acId(): int
+    {
+        $list = @IPS_GetInstanceListByModuleID('{43192F0B-135B-4CE7-A0A7-1475603F3060}');
+        if (is_array($list) && count($list) > 0) return (int)$list[0];
+        return 35472; // Fallback aus deinem Setup
     }
 
-    // Batterie (Vorzeichen bleibt gemäß Quelle; nur Einheitsskalierung)
-    $bat  = $this->seriesLogged($batID,  $from, $to, $batScale);
+    private function seriesLogged(int $vid, int $from, int $to, float $scale = 1.0): array
+    {
+        if ($vid <= 0 || !@IPS_VariableExists($vid)) return [];
+        $rows = @AC_GetLoggedValues($this->acId(), $vid, $from, $to, 0);
+        if (!is_array($rows)) return [];
+        $out = [];
+        foreach ($rows as $r) $out[] = [$r['TimeStamp'] * 1000, (float)$r['Value'] * $scale];
+        return $out;
+    }
 
-    // Schwellen aus Properties
-    $thr = [
-        'startW' => (int)$this->ReadPropertyInteger('StartThresholdW'),
-        'stopW'  => (int)$this->ReadPropertyInteger('StopThresholdW'),
-        'to1p'   => (int)$this->ReadPropertyInteger('ThresTo1p_W'),
-        'to3p'   => (int)$this->ReadPropertyInteger('ThresTo3p_W'),
-    ];
-
-    $data = [ 'pv'=>$pv, 'haus'=>$haus, 'bat'=>$bat, 'wb'=>$wb, 'soc'=>$soc, 'thr'=>$thr ];
-    $json = json_encode($data);
-
-    $html = <<<HTML
-<div style="padding:6px"><canvas id="ldc" height="220"></canvas></div>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
-<script>
-const D = $json;
-function x0() {
-  const arrs = [D.pv,D.haus,D.bat,D.wb,D.soc].filter(a=>a && a.length);
-  if (!arrs.length) return Date.now()-12*3600*1000;
-  return Math.min(...arrs.map(a=>a[0][0]));
-}
-function x1() {
-  const arrs = [D.pv,D.haus,D.bat,D.wb,D.soc].filter(a=>a && a.length);
-  if (!arrs.length) return Date.now();
-  return Math.max(...arrs.map(a=>a[a.length-1][0]));
-}
-const X0 = x0(), X1 = x1();
-const ds = [
-  {label:'PV [W]',       data:D.pv,   parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'yW',  pointRadius:0},
-  {label:'Haus o. WB [W]',data:D.haus,parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'yW',  pointRadius:0},
-  {label:'Batterie [W]', data:D.bat,  parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'yW',  pointRadius:0},
-  {label:'Wallbox [W]',  data:D.wb,   parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'yW',  pointRadius:0},
-  {label:'SoC [%]',      data:D.soc,  parsing:{xAxisKey:0,yAxisKey:1}, yAxisID:'ySOC',pointRadius:0}
-];
-function line(label, y){ return {label, data:[[X0,y],[X1,y]], yAxisID:'yW', borderDash:[5,4], pointRadius:0}; }
-if (Number.isFinite(D.thr.startW)) ds.push(line('Startschwelle', D.thr.startW));
-if (Number.isFinite(D.thr.stopW))  ds.push(line('Stoppschwelle',  D.thr.stopW));
-if (Number.isFinite(D.thr.to1p))   ds.push(line('→1-phasig',      D.thr.to1p));
-if (Number.isFinite(D.thr.to3p))   ds.push(line('→3-phasig',      D.thr.to3p));
-
-new Chart(document.getElementById('ldc').getContext('2d'),{
-  type:'line',
-  data:{datasets:ds},
-  options:{
-    parsing:false,
-    interaction:{mode:'nearest', intersect:false},
-    scales:{
-      x:{type:'time', time:{tooltipFormat:'dd.MM HH:mm'}},
-      yW:{type:'linear', position:'left'},
-      ySOC:{type:'linear', position:'right', min:0, max:100, grid:{drawOnChartArea:false}}
-    },
-    plugins:{legend:{position:'top'}}
-  }
-});
-</script>
-HTML;
-
-    $this->setHtmlIfChanged('Ladechart', $html);
-}
+    private function unitScale(string $unit): float
+    {
+        $u = strtolower(trim($unit));
+        if ($u === 'kw') return 1000.0;
+        return 1.0; // 'w' oder unbekannt
+    }
 
     // flackern vermeiden: nur aktualisieren, wenn sich HTML ändert
     private function setHtmlIfChanged(string $ident, string $html): void {
@@ -459,15 +369,6 @@ HTML;
         $start = strtotime(date('Y-m-d 00:00:00', $d));
         $end   = strtotime(date('Y-m-d 23:59:59', $d));
         return [$start, $end];
-    }
-
-    // Debounce ohne Timer
-    private function renderChartIfDue(int $minGapMs = 3000): void {
-        $now  = (int)(microtime(true)*1000);
-        $last = (int)$this->ReadAttributeInteger('LastChartUpdateMs');
-        if (($now - $last) < $minGapMs) return;
-        $this->WriteAttributeInteger('LastChartUpdateMs', $now);
-        $this->RenderLadechart(); // rendert sofort
     }
 
 }
