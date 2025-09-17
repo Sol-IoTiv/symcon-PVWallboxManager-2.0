@@ -413,7 +413,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             : ($pv - $battForCalc - $houseTotal + $wbW);// bestehende PV-Auto-Logik
 
         // EMA
-        $alpha   = min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0));
+        $alpha   = min(1.0, max(0.0), (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0);
         $emaPrev = (int)$this->ReadAttributeInteger('SlowSurplusW');
         $ema     = (int)round($alpha*$surplusRaw + (1.0-$alpha)*$emaPrev);
         $this->WriteAttributeInteger('SlowSurplusW', $ema);
