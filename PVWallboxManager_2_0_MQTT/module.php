@@ -413,7 +413,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             : ($pv - $battForCalc - $houseTotal + $wbW);// bestehende PV-Auto-Logik
 
         // EMA
-        $alpha   = min(1.0, max(0.0), (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0);
+        $alpha   = min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0));
+
         $emaPrev = (int)$this->ReadAttributeInteger('SlowSurplusW');
         $ema     = (int)round($alpha*$surplusRaw + (1.0-$alpha)*$emaPrev);
         $this->WriteAttributeInteger('SlowSurplusW', $ema);
@@ -426,12 +427,11 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             $fullOrNone = ($batSocID <= 0) || ($batSoc >= 99.0); // kein Akku oder voll
             $pctEff = $fullOrNone ? 100 : $sliderPct;
 
-            $targetW = max(0, (int)round( ($ema - max(0,$reserveW)) * $pctEff / 100.0 ));
-            // SoC-Gurt: erst Akku laden, dann Auto
-            if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
+            $targetW = max(0, (int)round(($ema - max(0,$reserveW)) * $pctEff / 100.0));
+            // KEINE SoC-Sperre im PV-Anteil-Modus!
         } else {
             $targetW = max(0, $ema - max(0, $reserveW));
-            if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
+            if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; } // nur in PV-Auto
         }
 
         $this->WriteAttributeInteger('Slow_TargetW', (int)$targetW);
@@ -585,11 +585,13 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $targetW    = (int)$this->ReadAttributeInteger('Slow_TargetW');
         $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW');
 
-        // SoC-Gurt nur hier
-        $batSocID = (int)$this->ReadPropertyInteger('VarBatterySoc_ID');
-        $batSoc   = ($batSocID>0 && @IPS_VariableExists($batSocID)) ? (float)@GetValue($batSocID) : -1.0;
-        $minSoc   = (int)$this->ReadPropertyInteger('BatteryMinSocForPV');
-        if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
+        // SoC-Gurt nur im PV-Auto (Mode==0), NICHT im PV-Anteil
+        if ($mode !== 3) {
+            $batSocID = (int)$this->ReadPropertyInteger('VarBatterySoc_ID');
+            $batSoc   = ($batSocID>0 && @IPS_VariableExists($batSocID)) ? (float)@GetValue($batSocID) : -1.0;
+            $minSoc   = (int)$this->ReadPropertyInteger('BatteryMinSocForPV');
+            if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
+        }
 
         // STOP: nicht verbunden oder Ziel zu klein -> neutral
         if (!$connected || $targetW < $minTargetW) {
