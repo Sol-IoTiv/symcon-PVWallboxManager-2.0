@@ -396,11 +396,16 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         $connected   = in_array($car, [2,3,4], true);
         $battForCalc = ($connected && $batSoc >= 0 && $batSoc >= $minSoc) ? 0 : $battCharge;
-
-        // Haus ohne WB (für PV-Anteil)
-        $houseNetVid = @$this->GetIDForIdent('HouseNet_W');
-        $houseNet    = $houseNetVid ? (int)@GetValue($houseNetVid) : ($houseTotal - $wbW);
-
+        
+        // Haus ohne WB (für PV-Anteil) – immer EMA verwenden, wenn vorhanden
+        $houseNetAttr = (int)$this->ReadAttributeInteger('HouseNetEmaW');
+        if ($houseNetAttr > 0) {
+            $houseNet = $houseNetAttr;
+        } else {
+            $houseNetVid = @$this->GetIDForIdent('HouseNet_W');
+            $houseNet    = $houseNetVid ? (int)@GetValue($houseNetVid) : ($houseTotal - $wbW);
+        }
+        
         $useShareMode = ($mode === 3);
 
         // Überschuss-Rohwert
@@ -593,6 +598,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             if ($batSoc >= 0 && $batSoc < $minSoc) { $this->dbgLog('START-DECIDE', sprintf('SoC guard active: %.1f < %d → targetW=0', $batSoc, $minSoc)); $targetW = 0; }
         }
 
+        // DEBUG direkt vor Anti-Flackern / Startentscheidung
         $this->dbgLog('START-DECIDE', sprintf(
             'mode=%d connected=%d targetW=%d minTargetW=%d frc=%d bank=%.1f',
             $mode, (int)$connected, $targetW, $minTargetW,
@@ -610,8 +616,10 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         // Anti-Flackern: nur wenn kein Phasenwechsel läuft
         $phaseSwitchActive = ((int)$this->ReadAttributeInteger('PhaseSwitchState') !== 0);
         if (!$phaseSwitchActive) {
-            $pvSurplusW = (int)$this->calcPvUeberschussW();
-            $this->dbgLog('AF_INPUT', sprintf('pvSurplusW=%d', $pvSurplusW));
+            // *** WICHTIG: geglätteten Überschuss (EMA) verwenden ***
+            $pvSurplusW = (int)$this->ReadAttributeInteger('SlowSurplusW');
+            $this->dbgLog('AF_INPUT', sprintf('pvSurplusW(EMA)=%d', $pvSurplusW));
+
             $frcBefore = (int)@GetValue(@$this->GetIDForIdent('FRC'));
             $this->ApplyAntiFlackerLogic($pvSurplusW); // entscheidet ausschließlich über FRC 1/2
             $frc = (int)@GetValue(@$this->GetIDForIdent('FRC')); // aktualisieren
@@ -625,26 +633,31 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         if (($nowMs - $lastPub) < $gapMs) { $this->WriteAttributeInteger('LastCarState', $car); $this->dbgLog('HOLD', sprintf('publish hold %dms < gap %dms', $nowMs-$lastPub, $gapMs)); return; }
         if (!$connected) { $this->WriteAttributeInteger('LastCarState', $car); $this->dbgLog('HOLD', 'not connected (late)'); return; }
 
-        // Auto-Phasenwechsel mit Sperrzeit
+        // Auto-Phasenwechsel mit Sperrzeit + „Gating“ am Amp-Limit
         if ($this->ReadPropertyBoolean('AutoPhase')) {
             $holdMs = (int)$this->ReadPropertyInteger('MinHoldAfterPhaseMs');
             $lastSw = (int)$this->ReadAttributeInteger('LastPhaseSwitchMs');
             if ($nowMs - $lastSw >= $holdMs) {
-                $pmCur = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')) ?: 1; // 1|3 (UI)
-                $p3    = (int)$this->ReadAttributeInteger('Phase_Above3pMs');
-                $p1    = (int)$this->ReadAttributeInteger('Phase_Below1pMs');
-                $need3 = max(1,(int)$this->ReadPropertyInteger('To3pCycles')) * 1000;
-                $need1 = max(1,(int)$this->ReadPropertyInteger('To1pCycles')) * 1000;
+                $pmCur     = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')) ?: 1; // 1|3 (UI)
+                $p3        = (int)$this->ReadAttributeInteger('Phase_Above3pMs');
+                $p1        = (int)$this->ReadAttributeInteger('Phase_Below1pMs');
+                $need3     = max(1,(int)$this->ReadPropertyInteger('To3pCycles')) * 1000;
+                $need1     = max(1,(int)$this->ReadPropertyInteger('To1pCycles')) * 1000;
+                $minA      = (int)$this->ReadPropertyInteger('MinAmp');
+                $maxA      = (int)$this->ReadPropertyInteger('MaxAmp');
+                $lastCalcA = (int)$this->ReadAttributeInteger('Slow_LastCalcA'); // SLOW_TickUI schreibt das
 
-                if ($pmCur === 1 && $p3 >= $need3) {
-                    $this->dbgLog('PHASE_DECIDE', sprintf('→ 3p (%dms ≥ %dms)', $p3, $need3));
+                // Hoch nur, wenn EMA lange genug hoch ODER (gleich), UND Ziel-Ampere am oberen Limit klebt
+                if ($pmCur === 1 && $p3 >= $need3 && $lastCalcA >= $maxA) {
+                    $this->dbgLog('PHASE_DECIDE', sprintf('→ 3p (p3 %dms ≥ %dms & lastCalcA %d ≥ maxA %d)', $p3, $need3, $lastCalcA, $maxA));
                     $this->sendSet('psm', '2'); if ($vidPM=@$this->GetIDForIdent('Phasenmodus')) @SetValue($vidPM,3);
                     $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
                     $this->WriteAttributeInteger('LastCarState', $car);
                     return;
                 }
-                if ($pmCur === 3 && $p1 >= $need1) {
-                    $this->dbgLog('PHASE_DECIDE', sprintf('→ 1p (%dms ≥ %dms)', $p1, $need1));
+                // Runter nur, wenn EMA lange genug niedrig ODER (gleich), UND Ziel-Ampere nahe Min
+                if ($pmCur === 3 && $p1 >= $need1 && $lastCalcA <= $minA + 1) {
+                    $this->dbgLog('PHASE_DECIDE', sprintf('→ 1p (p1 %dms ≥ %dms & lastCalcA %d ≤ minA+1 %d)', $p1, $need1, $lastCalcA, $minA+1));
                     $this->sendSet('psm', '1'); if ($vidPM=@$this->GetIDForIdent('Phasenmodus')) @SetValue($vidPM,1);
                     $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
                     $this->WriteAttributeInteger('LastCarState', $car);
@@ -697,85 +710,61 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     // -------------------------
     // Hilfsrechner: Hausverbrauch ohne WB
     // -------------------------
-    public function RecalcHausverbrauchAbzWallbox(bool $withLog = true): void
-    {
-        // Haus gesamt (positiv, inkl. WB)
-        $houseTotal = (int)round((float)$this->readVarWUnit('VarHouse_ID','VarHouse_Unit'));
+    RecalcHausverbrauchAbzWallbox(
 
-        // WB-Leistung aus eigener Variablen (positiv). Fallback: Trait.
-        $wbVid = @$this->GetIDForIdent('PowerToCar_W');
-        $wb    = $wbVid ? (int)@GetValue($wbVid) : (int)round(max(0.0, (float)$this->getWBPowerW()));
-        if ($wb < 0) $wb = 0;
+        private function ApplyAntiFlackerLogic(int $pvSurplusW): void
+        {
+            // Konfiguration mit sinnvollen Defaults
+            $StartW   = (int)($this->ReadPropertyInteger('StartThresholdW') ?: 1400);
+            $StopW    = (int)($this->ReadPropertyInteger('StopThresholdW')  ?: -300);
+            $MinOn_s  = (int)($this->ReadPropertyInteger('MinOn_s')  ?: max(1, (int)round(($this->ReadPropertyInteger('MinOnTimeMs')  ?: 60000) / 1000)));
+            $MinOff_s = (int)($this->ReadPropertyInteger('MinOff_s') ?: max(1, (int)round(($this->ReadPropertyInteger('MinOffTimeMs') ?: 15000) / 1000)));
+            $BufferWh = (int)($this->ReadPropertyInteger('DeficitBufferWh') ?: 40);
 
-        // Haus ohne WB
-        $houseNet = max(0, $houseTotal - $wb);
-        $this->SetValueSafe('HouseNet_W', $houseNet);
-
-        // Kompatibilität (falls vorhanden)
-        if ($vid = @$this->GetIDForIdent('Hausverbrauch_abz_Wallbox')) { @SetValue($vid, $houseNet); }
-
-        if ($withLog) {
-            $fmt = static function (int $w): string { return number_format($w, 0, ',', '.'); };
-            $this->dbgLog('HausNet', sprintf(
-                'HausGesamt=%s W | WB=%s W → HausNet=%s W',
-                $fmt($houseTotal), $fmt($wb), $fmt($houseNet)
-            ));
-        }
-    }
-
-    private function ApplyAntiFlackerLogic(int $pvSurplusW): void
-    {
-        // Konfiguration mit sinnvollen Defaults
-        $StartW   = (int)($this->ReadPropertyInteger('StartThresholdW') ?: 1400);
-        $StopW    = (int)($this->ReadPropertyInteger('StopThresholdW')  ?: -300);
-        $MinOn_s  = (int)($this->ReadPropertyInteger('MinOn_s')  ?: max(1, (int)round(($this->ReadPropertyInteger('MinOnTimeMs')  ?: 60000) / 1000)));
-        $MinOff_s = (int)($this->ReadPropertyInteger('MinOff_s') ?: max(1, (int)round(($this->ReadPropertyInteger('MinOffTimeMs') ?: 15000) / 1000)));
-        $BufferWh = (int)($this->ReadPropertyInteger('DeficitBufferWh') ?: 40);
-
-        // Sanity: Start-Schwelle sollte über Stop-Schwelle liegen
-        if ($StartW <= $StopW) {
-            $StopW = $StartW - 1;
-        }
-
-        $nowMs      = (int)(microtime(true) * 1000);
-        $lastChange = (int)$this->ReadAttributeInteger('LastFrcChangeMs');
-        $since_s    = max(0.0, ($nowMs - $lastChange) / 1000.0);
-
-        // Energiekonto (Defizit positiv)
-        $kontoWhPrev = (float)$this->ReadAttributeFloat('DeficitBankWh');
-        $kontoWh     = $kontoWhPrev;
-        $lastTs      = (int)$this->ReadAttributeInteger('LastBankTsMs');
-        if ($lastTs <= 0) $lastTs = $nowMs;
-        $dt_h = max(0.001, ($nowMs - $lastTs) / 3600000.0);
-        $kontoWh += (-$pvSurplusW) * $dt_h;
-
-        // Begrenzen & runden, um unnötige Flash-Writes zu vermeiden
-        $maxWh  = max(2 * $BufferWh, 200.0);
-        if ($kontoWh >  $maxWh) $kontoWh =  $maxWh;
-        if ($kontoWh < -$maxWh) $kontoWh = -$maxWh;
-        $kontoWh = round($kontoWh, 1);
-
-        $this->WriteAttributeFloat('DeficitBankWh', $kontoWh);
-        $this->WriteAttributeInteger('LastBankTsMs', $nowMs);
-
-        // Aktueller FRC-Status (1=Stop, 2=Start; 0 wird hier nicht verwendet)
-        $frcVid = @$this->GetIDForIdent('FRC');
-        $frcIst = $frcVid ? (int)@GetValue($frcVid) : 1;
-        if ($frcIst < 1 || $frcIst > 2) $frcIst = 1;
-
-        // Entscheidung mit Hysterese + Mindestlaufzeiten + Energiekonto
-        if ($frcIst !== 2) {
-            // Start erlauben
-            if ($pvSurplusW >= $StartW && $kontoWh <= -$BufferWh && $since_s >= $MinOff_s) {
-                $this->setFRC(2, sprintf('AF: Start (PV=%d W, Bank=%.1f Wh, since=%.0fs)', $pvSurplusW, $kontoWh, $since_s));
+            // Sanity: Start-Schwelle sollte über Stop-Schwelle liegen
+            if ($StartW <= $StopW) {
+                $StopW = $StartW - 1;
             }
-        } else {
-            // Stop verlangen
-            if ($pvSurplusW <= $StopW && $kontoWh >= $BufferWh && $since_s >= $MinOn_s) {
-                $this->setFRC(1, sprintf('AF: Stop (PV=%d W, Bank=%.1f Wh, since=%.0fs)', $pvSurplusW, $kontoWh, $since_s));
+
+            $nowMs      = (int)(microtime(true) * 1000);
+            $lastChange = (int)$this->ReadAttributeInteger('LastFrcChangeMs');
+            $since_s    = max(0.0, ($nowMs - $lastChange) / 1000.0);
+
+            // Energiekonto (Defizit positiv)
+            $kontoWhPrev = (float)$this->ReadAttributeFloat('DeficitBankWh');
+            $kontoWh     = $kontoWhPrev;
+            $lastTs      = (int)$this->ReadAttributeInteger('LastBankTsMs');
+            if ($lastTs <= 0) $lastTs = $nowMs;
+            $dt_h = max(0.001, ($nowMs - $lastTs) / 3600000.0);
+            $kontoWh += (-$pvSurplusW) * $dt_h;
+
+            // Begrenzen & runden, um unnötige Flash-Writes zu vermeiden
+            $maxWh  = max(2 * $BufferWh, 200.0);
+            if ($kontoWh >  $maxWh) $kontoWh =  $maxWh;
+            if ($kontoWh < -$maxWh) $kontoWh = -$maxWh;
+            $kontoWh = round($kontoWh, 1);
+
+            $this->WriteAttributeFloat('DeficitBankWh', $kontoWh);
+            $this->WriteAttributeInteger('LastBankTsMs', $nowMs);
+
+            // Aktueller FRC-Status (1=Stop, 2=Start; 0 wird hier nicht verwendet)
+            $frcVid = @$this->GetIDForIdent('FRC');
+            $frcIst = $frcVid ? (int)@GetValue($frcVid) : 1;
+            if ($frcIst < 1 || $frcIst > 2) $frcIst = 1;
+
+            // Entscheidung mit Hysterese + Mindestlaufzeiten + Energiekonto
+            if ($frcIst !== 2) {
+                // Start erlauben
+                if ($pvSurplusW >= $StartW && $kontoWh <= -$BufferWh && $since_s >= $MinOff_s) {
+                    $this->setFRC(2, sprintf('AF: Start (PV=%d W, Bank=%.1f Wh, since=%.0fs)', $pvSurplusW, $kontoWh, $since_s));
+                }
+            } else {
+                // Stop verlangen
+                if ($pvSurplusW <= $StopW && $kontoWh >= $BufferWh && $since_s >= $MinOn_s) {
+                    $this->setFRC(1, sprintf('AF: Stop (PV=%d W, Bank=%.1f Wh, since=%.0fs)', $pvSurplusW, $kontoWh, $since_s));
+                }
             }
         }
-    }
 
     private function setFRC(int $frc, string $reason = ''): void
     {
