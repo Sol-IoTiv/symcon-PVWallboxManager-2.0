@@ -371,4 +371,48 @@ trait Helpers
         return [$start, $end];
     }
 
+    // In class PVWallboxManager_2_0_MQTT
+    private function calcPvUeberschussW(): int
+    {
+        // Modus: 0=PV-Auto, 1=Manuell, 2=Nur Anzeige, 3=PV-Anteil
+        $mode = (int)@GetValue(@$this->GetIDForIdent('Mode'));
+
+        // Eingänge (W / kW-handling via readVarWUnit)
+        $pv         = (int)round((float)$this->readVarWUnit('VarPV_ID','VarPV_Unit'));
+        $houseTotal = (int)round((float)$this->readVarWUnit('VarHouse_ID','VarHouse_Unit'));
+
+        // WB-Leistung: bevorzugt eigene Variable; sonst 0
+        $wbVid = @$this->GetIDForIdent('PowerToCar_W');
+        $wbW   = $wbVid ? (int)@GetValue($wbVid) : 0;
+
+        // Batterie (nur Laden als Verbrauch)
+        $batt = (int)round((float)$this->readVarWUnit('VarBattery_ID','VarBattery_Unit'));
+        if (!$this->ReadPropertyBoolean('BatteryPositiveIsCharge')) { $batt = -$batt; }
+        $battCharge = max(0, $batt);
+
+        // Haus ohne WB (für PV-Anteil)
+        $houseNetVid = @$this->GetIDForIdent('HouseNet_W');
+        $houseNet    = $houseNetVid ? (int)@GetValue($houseNetVid) : max(0, $houseTotal - max(0, $wbW));
+
+        // SoC-Gurt (nur im PV-Auto nutzen, nicht im PV-Anteil)
+        $battForCalc = $battCharge;
+        if ($mode !== 3) {
+            $socId = (int)$this->ReadPropertyInteger('VarBatterySoc_ID');
+            $soc   = ($socId>0 && @IPS_VariableExists($socId)) ? (float)@GetValue($socId) : -1.0;
+            $min   = (int)$this->ReadPropertyInteger('BatteryMinSocForPV');
+            if ($soc >= 0 && $soc >= $min) {
+                $battForCalc = 0; // Akku bereits „ok“ → nicht als Verbrauch abziehen
+            }
+        }
+
+        // Roh-Überschuss je Modus
+        if ($mode === 3) {
+            // PV-Anteil: Überschuss vor Akku/Auto
+            return (int)($pv - $houseNet);
+        }
+
+        // PV-Auto (klassisch): PV - (Haus inkl. WB) - (Batterieladung) + WB (da in Haus enthalten)
+        return (int)max(0, $pv - $battForCalc - $houseTotal + max(0, $wbW));
+    }
+
 }
