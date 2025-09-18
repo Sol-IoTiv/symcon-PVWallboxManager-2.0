@@ -414,7 +414,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         // EMA
         $alpha   = min(1.0, max(0.0, (int)$this->ReadPropertyInteger('SlowAlphaPermille')/1000.0));
-
         $emaPrev = (int)$this->ReadAttributeInteger('SlowSurplusW');
         $ema     = (int)round($alpha*$surplusRaw + (1.0-$alpha)*$emaPrev);
         $this->WriteAttributeInteger('SlowSurplusW', $ema);
@@ -505,10 +504,11 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     {
         if (!$this->ReadPropertyBoolean('SlowControlEnabled')) return;
 
-        $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV,1=Manuell,2=Nur Anzeige,3=PV-Anteil
+        // 0=PV, 1=Manuell, 2=Nur Anzeige, 3=PV-Anteil
+        $mode = (int)@GetValue(@$this->GetIDForIdent('Mode'));
         if ($mode === 2) return;
 
-        $nowMs   = (int)(microtime(true)*1000);
+        $nowMs   = (int)(microtime(true) * 1000);
         $gapMs   = (int)$this->ReadPropertyInteger('MinPublishGapMs');
         $lastPub = (int)$this->ReadAttributeInteger('LastPublishMs');
 
@@ -518,12 +518,12 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         // ===== MANUELL (fix) =====
         if ($mode === 1) {
-            if (!$connected) { // neutral warten
+            if (!$connected) {                         // neutral warten
                 if ($frc !== 0) { $this->setFRC(0, 'manuell: nicht verbunden'); }
                 return;
             }
 
-            // Phasenwechsel-Sequenz (Stop -> psm -> Start)
+            // Phasenwechsel-Sequenz (Stop → psm → Start)
             $pend   = (int)$this->ReadAttributeInteger('PendingPhaseMode');   // 0|1|3
             $pstate = (int)$this->ReadAttributeInteger('PhaseSwitchState');   // 0..3
             $tmark  = (int)$this->ReadAttributeInteger('LastPhaseSwitchMs');
@@ -539,7 +539,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
                     case 1: // psm setzen
                         if ($nowMs - $tmark >= $hold) {
-                            $this->sendSet('psm', ($pend===3)?'2':'1');
+                            $this->sendSet('psm', ($pend === 3) ? '2' : '1');
                             $this->WriteAttributeInteger('PhaseSwitchState', 2);
                             $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
                         }
@@ -572,28 +572,35 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                     (int)@GetValue(@$this->GetIDForIdent('Ampere_A')))
             );
 
-            $this->sendSet('psm', ($pmUi===3)?'2':'1');
+            $this->sendSet('psm', ($pmUi === 3) ? '2' : '1');
             $this->setCurrentLimitA($aSel);
             if ($frc !== 2) { $this->setFRC(2, 'manuell halten'); }
-            if ($vidA=@$this->GetIDForIdent('Ampere_A')) @SetValue($vidA, $aSel);
+            if ($vidA = @$this->GetIDForIdent('Ampere_A')) @SetValue($vidA, $aSel);
             $this->WriteAttributeInteger('LastAmpSet',    $aSel);
             $this->WriteAttributeInteger('LastPublishMs', $nowMs);
             return;
         }
 
-        // ===== PV-AUTOMATIK =====
+        // ===== PV-AUTOMATIK (0) & PV-ANTEIL (3) =====
         $targetW    = (int)$this->ReadAttributeInteger('Slow_TargetW');
         $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW');
 
-        // SoC-Gurt nur im PV-Auto (Mode==0), NICHT im PV-Anteil
-        if ($mode !== 3) {
+        // SoC-Gurt NUR in PV-Auto (Mode 0). In PV-Anteil (3) explizit keine Sperre.
+        if ($mode === 0) {
             $batSocID = (int)$this->ReadPropertyInteger('VarBatterySoc_ID');
-            $batSoc   = ($batSocID>0 && @IPS_VariableExists($batSocID)) ? (float)@GetValue($batSocID) : -1.0;
+            $batSoc   = ($batSocID > 0 && @IPS_VariableExists($batSocID)) ? (float)@GetValue($batSocID) : -1.0;
             $minSoc   = (int)$this->ReadPropertyInteger('BatteryMinSocForPV');
             if ($batSoc >= 0 && $batSoc < $minSoc) { $targetW = 0; }
         }
 
-        // STOP: nicht verbunden oder Ziel zu klein -> neutral
+        $this->dbgLog('START-DECIDE', sprintf(
+            'mode=%d connected=%d targetW=%d minTargetW=%d frc=%d bank=%.1f',
+            $mode, (int)$connected, $targetW, $minTargetW,
+            (int)@GetValue(@$this->GetIDForIdent('FRC')),
+            (float)$this->ReadAttributeFloat('DeficitBankWh')
+        ));
+
+        // STOP: nicht verbunden oder Ziel zu klein → neutral
         if (!$connected || $targetW < $minTargetW) {
             if ($frc !== 0) { $this->setFRC(0, 'pv: ziel zu klein/kein auto'); }
             return;
@@ -607,7 +614,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             $frc = (int)@GetValue(@$this->GetIDForIdent('FRC')); // aktualisieren
         }
 
-        // Wenn FRC nicht frei oder Publish-Sperre aktiv -> raus
+        // Wenn FRC nicht frei oder Publish-Sperre aktiv → raus
         if ($frc !== 2 || ($nowMs - $lastPub) < $gapMs) { $this->WriteAttributeInteger('LastCarState', $car); return; }
         if (!$connected) { $this->WriteAttributeInteger('LastCarState', $car); return; }
 
@@ -619,17 +626,17 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 $pmCur = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')) ?: 1; // 1|3 (UI)
                 $p3    = (int)$this->ReadAttributeInteger('Phase_Above3pMs');
                 $p1    = (int)$this->ReadAttributeInteger('Phase_Below1pMs');
-                $need3 = max(1,(int)$this->ReadPropertyInteger('To3pCycles')) * 1000;
-                $need1 = max(1,(int)$this->ReadPropertyInteger('To1pCycles')) * 1000;
+                $need3 = max(1, (int)$this->ReadPropertyInteger('To3pCycles')) * 1000;
+                $need1 = max(1, (int)$this->ReadPropertyInteger('To1pCycles')) * 1000;
 
                 if ($pmCur === 1 && $p3 >= $need3) {
-                    $this->sendSet('psm', '2'); if ($vidPM=@$this->GetIDForIdent('Phasenmodus')) @SetValue($vidPM,3);
+                    $this->sendSet('psm', '2'); if ($vidPM = @$this->GetIDForIdent('Phasenmodus')) @SetValue($vidPM, 3);
                     $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
                     $this->WriteAttributeInteger('LastCarState', $car);
                     return;
                 }
                 if ($pmCur === 3 && $p1 >= $need1) {
-                    $this->sendSet('psm', '1'); if ($vidPM=@$this->GetIDForIdent('Phasenmodus')) @SetValue($vidPM,1);
+                    $this->sendSet('psm', '1'); if ($vidPM = @$this->GetIDForIdent('Phasenmodus')) @SetValue($vidPM, 1);
                     $this->WriteAttributeInteger('LastPhaseSwitchMs', $nowMs);
                     $this->WriteAttributeInteger('LastCarState', $car);
                     return;
@@ -640,16 +647,16 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         // Feinregelung (2-Phasen aware)
         [$pmNow, /*$aIgnore*/] = $this->targetPhaseAmp($targetW);
         $U         = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
-        $phEffAttr = (int)$this->ReadAttributeInteger('WB_ActivePhases');       // 1/2/3
+        $phEffAttr = (int)$this->ReadAttributeInteger('WB_ActivePhases');          // 1/2/3
         $phForCalc = ($phEffAttr === 2) ? 2 : (($pmNow === 3) ? 3 : 1);
 
-        $minA  = (int)$this->ReadPropertyInteger('MinAmp');
-        $maxA  = (int)$this->ReadPropertyInteger('MaxAmp');
-        $vidA  = @$this->GetIDForIdent('Ampere_A');
-        $curA  = $vidA ? (int)@GetValue($vidA) : (int)$this->ReadAttributeInteger('LastAmpSet');
+        $minA = (int)$this->ReadPropertyInteger('MinAmp');
+        $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
+        $vidA = @$this->GetIDForIdent('Ampere_A');
+        $curA = $vidA ? (int)@GetValue($vidA) : (int)$this->ReadAttributeInteger('LastAmpSet');
         if ($curA <= 0) $curA = $minA;
 
-        $targetA = (int)ceil($targetW / ($U * max(1,$phForCalc)));
+        $targetA = (int)ceil($targetW / ($U * max(1, $phForCalc)));
         $targetA = min($maxA, max($minA, $targetA));
         if ($targetA === $curA) { $this->WriteAttributeInteger('LastCarState', $car); return; }
 
