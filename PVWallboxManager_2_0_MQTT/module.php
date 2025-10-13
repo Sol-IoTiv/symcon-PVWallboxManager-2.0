@@ -576,32 +576,41 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
             if (($nowMs - $lastPub) < $gapMs) { $this->dbgLog('MANUAL', sprintf('publish hold %dms < gap %dms', $nowMs-$lastPub, $gapMs)); return; }
 
             $pmUi = (int)@GetValue(@$this->GetIDForIdent('Phasenmodus')); // 1|3 (UI)
-            $aSel = min(
+
+            // Soll aus UI (NICHT überschreiben!)
+            $aDesired = min(
                 (int)$this->ReadPropertyInteger('MaxAmp'),
                 max((int)$this->ReadPropertyInteger('MinAmp'),
                     (int)@GetValue(@$this->GetIDForIdent('Ampere_A')))
             );
+            $aEff = $aDesired;
 
             // Hauszuleitungsbegrenzung im manuellen Modus
             $Uman = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
-            $phEffManAttr = (int)$this->ReadAttributeInteger('WB_ActivePhases');
-            $phEffMan = ($phEffManAttr>0) ? $phEffManAttr : (($pmUi===3) ? 3 : 1);
-            $desiredWman = (int)($aSel * $Uman * max(1,$phEffMan));
+            $phEffManAttr = (int)$this->ReadAttributeInteger('WB_ActivePhases');  // 1/2/3
+            $phEffMan = min(3, max(1, ($phEffManAttr>0) ? $phEffManAttr : (($pmUi===3) ? 3 : 1)));
+
+            $desiredWman = (int)($aDesired * $Uman * $phEffMan);
             $limitedWman = (int)$this->applyHouseLimit((float)$desiredWman);
+
             if ($limitedWman < $desiredWman) {
-                $limA = (int)floor($limitedWman / ($Uman * max(1,$phEffMan)));
+                $limA = (int)floor($limitedWman / ($Uman * $phEffMan));
                 $minA = (int)$this->ReadPropertyInteger('MinAmp');
                 $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
-                $aSel = min($maxA, max($minA, max($limA, 0)));
-                $this->dbgLog('HouseLimit', sprintf('manuell: desired=%dW → limited=%dW ⇒ amp=%d', $desiredWman, $limitedWman, $aSel));
+                $aEff = min($maxA, max($minA, max($limA, 0)));
+                $this->dbgLog('HouseLimit', sprintf('manuell: desired=%dW → limited=%dW ⇒ ampEff=%d (ampUI=%d)', $desiredWman, $limitedWman, $aEff, $aDesired));
             }
 
-            $this->dbgLog('MANUAL', sprintf('hold psm=%s amp=%d frc=%d', ($pmUi===3?'3p':'1p'), $aSel, $frc));
+            $this->dbgLog('MANUAL', sprintf('hold psm=%s ampEff=%d ampUI=%d frc=%d', ($pmUi===3?'3p':'1p'), $aEff, $aDesired, $frc));
             $this->sendSet('psm', ($pmUi===3)?'2':'1');
-            $this->setCurrentLimitA($aSel);
+            $this->setCurrentLimitA($aEff);
+
             if ($frc !== 2) { $this->dbgLog('MANUAL', 'frc→2'); $this->setFRC(2, 'manuell halten'); }
-            if ($vidA=@$this->GetIDForIdent('Ampere_A')) @SetValue($vidA, $aSel);
-            $this->WriteAttributeInteger('LastAmpSet',    $aSel);
+
+            // WICHTIG: Ampere_A NICHT auf $aEff zurückschreiben.
+            // if ($vidA=@$this->GetIDForIdent('Ampere_A')) @SetValue($vidA, $aEff);  // ← löschen
+
+            $this->WriteAttributeInteger('LastAmpSet',    $aEff);
             $this->WriteAttributeInteger('LastPublishMs', $nowMs);
             return;
         }
