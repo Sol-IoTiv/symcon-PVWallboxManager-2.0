@@ -716,35 +716,9 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         if ($vidA) @SetValue($vidA, $nextA);
         $this->WriteAttributeInteger('LastAmpSet',    $nextA);
         $this->WriteAttributeInteger('LastPublishMs', $nowMs);
-        $this->WriteAttributeInteger('LastCarS
-
-/**
- * Begrenze gewünschte Ladeleistung so, dass die Hauszuleitung max. Grid-Bezug nicht überschreitet.
- * Erwartung: Hausleistungsvariable gibt aktuellen Hausbezug (ohne Wallbox) in W an. Positive Werte = Bezug.
- */
-private function applyHouseLimit($desiredPowerW){
-    $desiredPowerW = (float)$desiredPowerW;
-            $limit = (float)$this->ReadPropertyInteger('MaxGridPowerW');
-    $varID = (int)$this->ReadPropertyInteger('HousePowerVarID');
-    if ($limit <= 0 || $varID <= 0) return $desiredPowerW;
-
-    $houseW = (float)@GetValue($varID);
-    if (!is_finite($houseW)) $houseW = 0.0;
-
-    $rest = max(0.0, $limit - max(0.0, $houseW));
-    if ($desiredPowerW > $rest) {
-        $this->dbgLog('HouseLimit', sprintf('aktiv: Haus=%.0f W, Limit=%.0f W, Rest=%.0f W → Ladeleistung %.0f → %.0f W',
-            $houseW, $limit, $rest, $desiredPowerW, $rest));
-        return $rest;
-    }
-    return $desiredPowerW;
-}
-tate',  $car);
-    }
-
-    // -------------------------
-    // Klassik-Loop bleibt verfügbar, wird aber in Slow nicht benutzt
-    // -------------------------
+        $this->WriteAttributeInteger('LastCarState',  $car);
+        return;
+    
     public function Loop(): void
     {
         // bewusst leer bzw. deaktiviert – Slow-Control übernimmt
