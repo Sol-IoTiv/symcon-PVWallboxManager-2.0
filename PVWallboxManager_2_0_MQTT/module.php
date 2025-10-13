@@ -718,8 +718,29 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->WriteAttributeInteger('LastPublishMs', $nowMs);
         $this->WriteAttributeInteger('LastCarState',  $car);
         return;
-    }
     
+    }
+    /**
+     * Hauszuleitungs-Limit: begrenzt gewünschte Ladeleistung so, dass Grid-Bezug <= MaxGridPowerW bleibt.
+     */
+    private function applyHouseLimit($desiredPowerW) {
+        $desiredPowerW = (float)$desiredPowerW;
+        $limit = (float)$this->ReadPropertyInteger('MaxGridPowerW');
+        $varID = (int)$this->ReadPropertyInteger('HousePowerVarID');
+        if ($limit <= 0 || $varID <= 0) return $desiredPowerW;
+
+        $houseW = (float)@GetValue($varID);
+        if (!is_finite($houseW)) $houseW = 0.0;
+
+        $rest = max(0.0, $limit - max(0.0, $houseW));
+        if ($desiredPowerW > $rest) {
+            $this->dbgLog('HouseLimit', sprintf('aktiv: Haus=%.0f W, Limit=%.0f W, Rest=%.0f W → Ladeleistung %.0f → %.0f W',
+                $houseW, $limit, $rest, $desiredPowerW, $rest));
+            return $rest;
+        }
+        return $desiredPowerW;
+    }
+
     public function Loop(): void
     {
         // bewusst leer bzw. deaktiviert – Slow-Control übernimmt
