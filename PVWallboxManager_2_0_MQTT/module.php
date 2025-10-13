@@ -872,21 +872,22 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                         [
                             'type'  => 'RowLayout',
                             'items' => [
-                                ['type' => 'NumberSpinner', 'name' => 'MinAmp',      'caption' => 'Min. Ampere', 'minimum' => 1,   'maximum' => 32,  'suffix' => ' A'],
-                                ['type' => 'NumberSpinner', 'name' => 'MaxAmp',      'caption' => 'Max. Ampere', 'minimum' => 1,   'maximum' => 32,  'suffix' => ' A'],
-                                ['type' => 'NumberSpinner', 'name' => 'NominalVolt', 'caption' => 'Netzspannung','minimum' => 200, 'maximum' => 245, 'suffix' => ' V'],
+                                ['type' => 'NumberSpinner', 'name' => 'MinAmp',      'caption' => 'Min. Ampere', 'minimum' => 1,  'maximum' => 32, 'suffix' => ' A'],
+                                ['type' => 'NumberSpinner', 'name' => 'MaxAmp',      'caption' => 'Max. Ampere', 'minimum' => 1,  'maximum' => 32, 'suffix' => ' A'],
+                                ['type' => 'NumberSpinner', 'name' => 'NominalVolt', 'caption' => 'Netzspannung','minimum' => 200,'maximum' => 245,'suffix' => ' V'],
                             ]
                         ],
                         ['type' => 'Label', 'caption' => "⚙️ Richtwerte: 3P Start ≈ {$thr3} W · 1P unter ≈ {$thr1} W"],
-                    ],
-                    [
-                        'type'    => 'ExpansionPanel',
-                        'caption' => '⚡ Hauszuleitungs-Wächter',
-                        'items'   => [
-                            ['type' => 'NumberSpinner',  'name' => 'MaxGridPowerW',  'caption' => 'Maximaler Leistungsbezug [W]', 'minimum' => 0, 'suffix' => ' W'],
-                            ['type' => 'SelectVariable','name' => 'HousePowerVarID', 'caption' => 'Variable Hausleistung (W)']
-                        ]
-                    ],
+                    ]
+                ],
+                [
+                    'type'    => 'ExpansionPanel',
+                    'caption' => '⚡ Hauszuleitungs-Wächter',
+                    'items'   => [
+                        ['type' => 'NumberSpinner',  'name' => 'MaxGridPowerW',  'caption' => 'Maximaler Leistungsbezug [W]', 'minimum' => 0, 'suffix' => ' W'],
+                        ['type' => 'SelectVariable','name' => 'HousePowerVarID', 'caption' => 'Variable Hausleistung (W)']
+                    ]
+                ],
                 [
                     'type'    => 'ExpansionPanel',
                     'caption' => '⚡ Eingänge',
@@ -897,9 +898,9 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                         [
                             'type'  => 'RowLayout',
                             'items' => [
-                                ['type' => 'Select', 'name' => 'VarPV_Unit',     'caption' => 'PV Einheit',   'options' => [['caption' => 'W','value' => 'W'], ['caption' => 'kW','value' => 'kW']]],
-                                ['type' => 'Select', 'name' => 'VarHouse_Unit',  'caption' => 'Haus Einheit', 'options' => [['caption' => 'W','value' => 'W'], ['caption' => 'kW','value' => 'kW']]],
-                                ['type' => 'Select', 'name' => 'VarBattery_Unit','caption' => 'Batt Einheit', 'options' => [['caption' => 'W','value' => 'W'], ['caption' => 'kW','value' => 'kW']]],
+                                ['type' => 'Select', 'name' => 'VarPV_Unit',     'caption' => 'PV Einheit',   'options' => [['caption'=>'W','value'=>'W'], ['caption'=>'kW','value'=>'kW']]],
+                                ['type' => 'Select', 'name' => 'VarHouse_Unit',  'caption' => 'Haus Einheit', 'options' => [['caption'=>'W','value'=>'W'], ['caption'=>'kW','value'=>'kW']]],
+                                ['type' => 'Select', 'name' => 'VarBattery_Unit','caption' => 'Batt Einheit', 'options' => [['caption'=>'W','value'=>'W'], ['caption'=>'kW','value'=>'kW']]],
                             ]
                         ],
                         ['type' => 'CheckBox',      'name' => 'BatteryPositiveIsCharge', 'caption' => '+ bedeutet Laden'],
