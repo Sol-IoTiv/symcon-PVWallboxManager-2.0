@@ -718,6 +718,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->WriteAttributeInteger('LastPublishMs', $nowMs);
         $this->WriteAttributeInteger('LastCarState',  $car);
         return;
+    }
     
     public function Loop(): void
     {
