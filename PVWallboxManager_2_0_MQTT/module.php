@@ -582,6 +582,20 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                     (int)@GetValue(@$this->GetIDForIdent('Ampere_A')))
             );
 
+            // Hauszuleitungsbegrenzung im manuellen Modus
+            $Uman = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
+            $phEffManAttr = (int)$this->ReadAttributeInteger('WB_ActivePhases');
+            $phEffMan = ($phEffManAttr>0) ? $phEffManAttr : (($pmUi===3) ? 3 : 1);
+            $desiredWman = (int)($aSel * $Uman * max(1,$phEffMan));
+            $limitedWman = (int)$this->applyHouseLimit((float)$desiredWman);
+            if ($limitedWman < $desiredWman) {
+                $limA = (int)floor($limitedWman / ($Uman * max(1,$phEffMan)));
+                $minA = (int)$this->ReadPropertyInteger('MinAmp');
+                $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
+                $aSel = min($maxA, max($minA, max($limA, 0)));
+                $this->dbgLog('HouseLimit', sprintf('manuell: desired=%dW → limited=%dW ⇒ amp=%d', $desiredWman, $limitedWman, $aSel));
+            }
+
             $this->dbgLog('MANUAL', sprintf('hold psm=%s amp=%d frc=%d', ($pmUi===3?'3p':'1p'), $aSel, $frc));
             $this->sendSet('psm', ($pmUi===3)?'2':'1');
             $this->setCurrentLimitA($aSel);
@@ -594,6 +608,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         // ===== PV-AUTOMATIK (Mode 0) & PV-ANTEIL (Mode 3) =====
         $targetW    = (int)$this->ReadAttributeInteger('Slow_TargetW');
+        // Hauszuleitungsbegrenzung
+        $targetW    = (int)$this->applyHouseLimit((float)$targetW);
         $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW');
 
         // SoC-Gurt nur im PV-Auto (Mode==0), NICHT im PV-Anteil
@@ -702,6 +718,50 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->WriteAttributeInteger('LastAmpSet',    $nextA);
         $this->WriteAttributeInteger('LastPublishMs', $nowMs);
         $this->WriteAttributeInteger('LastCarState',  $car);
+    }
+
+    /**
+     * Hauszuleitungs-Limit: begrenzt gewünschte Ladeleistung so, dass Grid-Bezug <= MaxGridPowerW bleibt.
+     * Unterstützt Hausvariable mit UND ohne enthaltene WB-Leistung.
+     */
+    private function applyHouseLimit($desiredPowerW) {
+        $desiredPowerW = (float)$desiredPowerW;
+
+        $limitW  = (float)$this->ReadPropertyInteger('MaxGridPowerW');
+        $houseID = (int)$this->ReadPropertyInteger('HousePowerVarID');
+        if ($limitW <= 0 || $houseID <= 0) return $desiredPowerW;
+
+        // Eingänge
+        $houseW = (float)@GetValue($houseID);                          if (!is_finite($houseW)) $houseW = 0.0;
+        $pvW    = (float)$this->readVarWUnit('VarPV_ID','VarPV_Unit'); if (!is_finite($pvW))    $pvW    = 0.0;
+
+        $battW  = (float)$this->readVarWUnit('VarBattery_ID','VarBattery_Unit');
+        $posIsCharge = (bool)$this->ReadPropertyBoolean('BatteryPositiveIsCharge');
+        $battDisW = $posIsCharge ? max(0.0, -$battW) : max(0.0, $battW); // Entladung positiv
+
+        // Aktuelle WB-Leistung
+        $wbVid = @$this->GetIDForIdent('PowerToCar_W');
+        $wbW   = $wbVid ? max(0.0, (float)@GetValue($wbVid)) : (float)round(max(0.0, (float)$this->getWBPowerW()));
+
+        // Erkenntnis: HousePowerVarID == VarHouse_ID ⇒ „inkl. WB“
+        $varHouseInclWB = (int)$this->ReadPropertyInteger('VarHouse_ID');
+        $houseIsTotal   = ($varHouseInclWB > 0 && $varHouseInclWB === $houseID);
+
+        // Aktueller Netzbezug
+        $gridNowW = $houseIsTotal
+            ? max(0.0, $houseW          - $pvW - $battDisW)   // Haus enthält WB schon
+            : max(0.0, ($houseW + $wbW) - $pvW - $battDisW);  // Haus ohne WB → WB addieren
+
+        $restW = max(0.0, $limitW - $gridNowW);
+
+        if ($desiredPowerW > $restW) {
+            $this->dbgLog('HouseLimit', sprintf(
+                'houseIsTotal=%d house=%.0f pv=%.0f battDis=%.0f wb=%.0f gridNow=%.0f limit=%.0f rest=%.0f desired=%.0f -> set=%.0f',
+                (int)$houseIsTotal, $houseW, $pvW, $battDisW, $wbW, $gridNowW, $limitW, $restW, $desiredPowerW, $restW
+            ));
+            return $restW;
+        }
+        return $desiredPowerW;
     }
 
     // -------------------------
