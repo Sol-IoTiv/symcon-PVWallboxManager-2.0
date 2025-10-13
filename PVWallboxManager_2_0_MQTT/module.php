@@ -39,6 +39,11 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterPropertyString('VarBattery_Unit', 'W');
         $this->RegisterPropertyBoolean('BatteryPositiveIsCharge', true);
 
+        // --- Netz-/Strom-Parameter & Zeiten ---
+        // --- Hauszuleitungs-Wächter ---
+        $this->RegisterPropertyInteger('MaxGridPowerW', 0);
+        $this->RegisterPropertyInteger('HousePowerVarID', 0);
+
         // Batterie-Logik
         $this->RegisterPropertyInteger('VarBatterySoc_ID', 0);
         $this->RegisterPropertyInteger('BatteryMinSocForPV', 90);
