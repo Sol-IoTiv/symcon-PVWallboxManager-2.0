@@ -52,7 +52,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterPropertyBoolean('SnapOnConnect', true);
         $this->RegisterPropertyBoolean('AutoPhase', true);
 
-        // --- Netz-/Strom-Parameter & Zeiten ---
+        // --- Netz-/Strom-Parameter & Zeiten ---\n        // --- Hauszuleitungs-Wächter ---\n        $this->RegisterPropertyInteger('MaxGridPowerW', 0);\n        $this->RegisterPropertyInteger('HousePowerVarID', 0);\n
         $this->RegisterPropertyInteger('MinAmp', 6);
         $this->RegisterPropertyInteger('MaxAmp', 16);
         $this->RegisterPropertyInteger('NominalVolt', 230);
@@ -576,6 +576,19 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 max((int)$this->ReadPropertyInteger('MinAmp'),
                     (int)@GetValue(@$this->GetIDForIdent('Ampere_A')))
             );
+            // Hauszuleitungsbegrenzung auch im manuellen Modus
+            $Uman = max(200, (int)$this->ReadPropertyInteger('NominalVolt'));
+            $phEffMan = ($pmUi===3) ? 3 : 1;
+            $desiredWman = (int)($aSel * $Uman * max(1,$phEffMan));
+            $limitedWman = (int)$this->applyHouseLimit((float)$desiredWman);
+            if ($limitedWman < $desiredWman) {
+                $limA = (int)floor($limitedWman / ($Uman * max(1,$phEffMan)));
+                $minA = (int)$this->ReadPropertyInteger('MinAmp');
+                $maxA = (int)$this->ReadPropertyInteger('MaxAmp');
+                $aSel = min($maxA, max($minA, max($limA, 0)));
+                $this->dbgLog('HouseLimit', sprintf('manuell: desired=%dW → limited=%dW ⇒ amp=%d', $desiredWman, $limitedWman, $aSel));
+            }
+
 
             $this->dbgLog('MANUAL', sprintf('hold psm=%s amp=%d frc=%d', ($pmUi===3?'3p':'1p'), $aSel, $frc));
             $this->sendSet('psm', ($pmUi===3)?'2':'1');
@@ -589,6 +602,9 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         // ===== PV-AUTOMATIK (Mode 0) & PV-ANTEIL (Mode 3) =====
         $targetW    = (int)$this->ReadAttributeInteger('Slow_TargetW');
+
+        // Hauszuleitungsbegrenzung anwenden
+        $targetW = (int)$this->applyHouseLimit((float)$targetW);
         $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW');
 
         // SoC-Gurt nur im PV-Auto (Mode==0), NICHT im PV-Anteil
@@ -696,7 +712,30 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         if ($vidA) @SetValue($vidA, $nextA);
         $this->WriteAttributeInteger('LastAmpSet',    $nextA);
         $this->WriteAttributeInteger('LastPublishMs', $nowMs);
-        $this->WriteAttributeInteger('LastCarState',  $car);
+        $this->WriteAttributeInteger('LastCarS
+
+/**
+ * Begrenze gewünschte Ladeleistung so, dass die Hauszuleitung max. Grid-Bezug nicht überschreitet.
+ * Erwartung: Hausleistungsvariable gibt aktuellen Hausbezug (ohne Wallbox) in W an. Positive Werte = Bezug.
+ */
+private function applyHouseLimit(float $desiredPowerW): float
+{
+    $limit = (float)$this->ReadPropertyInteger('MaxGridPowerW');
+    $varID = (int)$this->ReadPropertyInteger('HousePowerVarID');
+    if ($limit <= 0 || $varID <= 0) return $desiredPowerW;
+
+    $houseW = (float)@GetValue($varID);
+    if (!is_finite($houseW)) $houseW = 0.0;
+
+    $rest = max(0.0, $limit - max(0.0, $houseW));
+    if ($desiredPowerW > $rest) {
+        $this->dbgLog('HouseLimit', sprintf('aktiv: Haus=%.0f W, Limit=%.0f W, Rest=%.0f W → Ladeleistung %.0f → %.0f W',
+            $houseW, $limit, $rest, $desiredPowerW, $rest));
+        return $rest;
+    }
+    return $desiredPowerW;
+}
+tate',  $car);
     }
 
     // -------------------------
@@ -840,6 +879,16 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                         ],
                         ['type' => 'Label', 'caption' => "⚙️ Richtwerte: 3P Start ≈ {$thr3} W · 1P unter ≈ {$thr1} W"],
                     ]
+,
+[
+    'type'    => 'ExpansionPanel',
+    'caption' => '⚡ Hauszuleitungs-Wächter',
+    'items'   => [
+        ['type' => 'NumberSpinner',  'name' => 'MaxGridPowerW',  'caption' => 'Maximaler Leistungsbezug [W]', 'minimum' => 0, 'suffix' => ' W'],
+        ['type' => 'SelectVariable','name' => 'HousePowerVarID', 'caption' => 'Variable Hausleistung (W)']
+    ]
+]
+
                 ],
                 [
                     'type'    => 'ExpansionPanel',
