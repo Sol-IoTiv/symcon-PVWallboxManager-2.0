@@ -52,7 +52,11 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterPropertyBoolean('SnapOnConnect', true);
         $this->RegisterPropertyBoolean('AutoPhase', true);
 
-        // --- Netz-/Strom-Parameter & Zeiten ---\n        // --- Hauszuleitungs-Wächter ---\n        $this->RegisterPropertyInteger('MaxGridPowerW', 0);\n        $this->RegisterPropertyInteger('HousePowerVarID', 0);\n
+        // --- Netz-/Strom-Parameter & Zeiten ---
+        // --- Hauszuleitungs-Wächter ---
+        $this->RegisterPropertyInteger('MaxGridPowerW', 0);
+        $this->RegisterPropertyInteger('HousePowerVarID', 0);
+
         $this->RegisterPropertyInteger('MinAmp', 6);
         $this->RegisterPropertyInteger('MaxAmp', 16);
         $this->RegisterPropertyInteger('NominalVolt', 230);
