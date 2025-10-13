@@ -878,7 +878,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                             ]
                         ],
                         ['type' => 'Label', 'caption' => "⚙️ Richtwerte: 3P Start ≈ {$thr3} W · 1P unter ≈ {$thr1} W"],
-<<<<<<< HEAD
                     ],
                     [
                         'type'    => 'ExpansionPanel',
@@ -888,17 +887,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                             ['type' => 'SelectVariable','name' => 'HousePowerVarID', 'caption' => 'Variable Hausleistung (W)']
                         ]
                     ],
-                    ]
-                    ,
-                    [
-                        'type'    => 'ExpansionPanel',
-                        'caption' => '⚡ Hauszuleitungs-Wächter',
-                        'items'   => [
-                            ['type' => 'NumberSpinner',  'name' => 'MaxGridPowerW',  'caption' => 'Maximaler Leistungsbezug [W]', 'minimum' => 0, 'suffix' => ' W'],
-                            ['type' => 'SelectVariable','name' => 'HousePowerVarID', 'caption' => 'Variable Hausleistung (W)']
-                        ]
-                    ]
-                ],
                 [
                     'type'    => 'ExpansionPanel',
                     'caption' => '⚡ Eingänge',
