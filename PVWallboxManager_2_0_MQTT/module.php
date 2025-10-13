@@ -722,9 +722,9 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
  * Begrenze gewünschte Ladeleistung so, dass die Hauszuleitung max. Grid-Bezug nicht überschreitet.
  * Erwartung: Hausleistungsvariable gibt aktuellen Hausbezug (ohne Wallbox) in W an. Positive Werte = Bezug.
  */
-private function applyHouseLimit(float $desiredPowerW): float
-{
-    $limit = (float)$this->ReadPropertyInteger('MaxGridPowerW');
+private function applyHouseLimit($desiredPowerW){
+    $desiredPowerW = (float)$desiredPowerW;
+            $limit = (float)$this->ReadPropertyInteger('MaxGridPowerW');
     $varID = (int)$this->ReadPropertyInteger('HousePowerVarID');
     if ($limit <= 0 || $varID <= 0) return $desiredPowerW;
 
