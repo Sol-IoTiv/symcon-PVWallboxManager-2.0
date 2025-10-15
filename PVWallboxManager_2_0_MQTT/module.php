@@ -42,7 +42,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         // --- Netz-/Strom-Parameter & Zeiten ---
         // --- Hauszuleitungs-Wächter ---
         $this->RegisterPropertyInteger('MaxGridPowerW', 0);
-        $this->RegisterPropertyInteger('HousePowerVarID', 0);
+        $this->RegisterPropertyInteger('GridImportVarID', 0);
 
         // Batterie-Logik
         $this->RegisterPropertyInteger('VarBatterySoc_ID', 0);
@@ -735,14 +735,13 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     private function applyHouseLimit($desiredPowerW) {
         $desiredPowerW = (float)$desiredPowerW;
         $limitW  = (float)$this->ReadPropertyInteger('MaxGridPowerW');
-        $gridVar = (int)$this->ReadPropertyInteger('GridImportVarID');
-        if ($gridVar <= 0) { $gridVar = (int)$this->ReadPropertyInteger('HousePowerVarID'); } // legacy
-        if ($limitW <= 0 || $gridVar <= 0) return $desiredPowerW;
+        $gridVar = (int)@$this->ReadPropertyInteger('GridImportVarID');
+        if ($limitW <= 0 || $gridVar <= 0) return (float)$desiredPowerW;
 
-        $gridNowW = (float)@GetValue($gridVar);                // positiver Import
+        $gridNowW = (float)@GetValue($gridVar);
         if (!is_finite($gridNowW)) $gridNowW = 0.0;
-        $restW = max(0.0, $limitW - max(0.0, $gridNowW));
 
+        $restW = max(0.0, $limitW - max(0.0, $gridNowW));
         if ($desiredPowerW > $restW) {
             $this->dbgLog('HouseLimit', sprintf(
                 'gridNow=%.0fW limit=%.0fW rest=%.0fW desired=%.0fW -> set=%.0fW',
@@ -900,7 +899,7 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                     'caption' => '⚡ Hauszuleitungs-Wächter',
                     'items'   => [
                         ['type' => 'NumberSpinner',  'name' => 'MaxGridPowerW',  'caption' => 'Maximaler Leistungsbezug [W]', 'minimum' => 0, 'suffix' => ' W'],
-                        ['type' => 'SelectVariable','name' => 'HousePowerVarID', 'caption' => 'Variable Hausleistung (W)']
+                        ['type' => 'SelectVariable', 'name' => 'GridImportVarID', 'caption' => 'Variable Netzbezug (W)']
                     ]
                 ],
                 [
