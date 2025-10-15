@@ -730,43 +730,23 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     }
 
     /**
-     * Hauszuleitungs-Limit: begrenzt gewünschte Ladeleistung so, dass Grid-Bezug <= MaxGridPowerW bleibt.
-     * Unterstützt Hausvariable mit UND ohne enthaltene WB-Leistung.
+     * Netzlimit anhand positiver Import-Variable.
      */
     private function applyHouseLimit($desiredPowerW) {
         $desiredPowerW = (float)$desiredPowerW;
-
         $limitW  = (float)$this->ReadPropertyInteger('MaxGridPowerW');
-        $houseID = (int)$this->ReadPropertyInteger('HousePowerVarID');
-        if ($limitW <= 0 || $houseID <= 0) return $desiredPowerW;
+        $gridVar = (int)$this->ReadPropertyInteger('GridImportVarID');
+        if ($gridVar <= 0) { $gridVar = (int)$this->ReadPropertyInteger('HousePowerVarID'); } // legacy
+        if ($limitW <= 0 || $gridVar <= 0) return $desiredPowerW;
 
-        // Eingänge
-        $houseW = (float)@GetValue($houseID);                          if (!is_finite($houseW)) $houseW = 0.0;
-        $pvW    = (float)$this->readVarWUnit('VarPV_ID','VarPV_Unit'); if (!is_finite($pvW))    $pvW    = 0.0;
-
-        $battW  = (float)$this->readVarWUnit('VarBattery_ID','VarBattery_Unit');
-        $posIsCharge = (bool)$this->ReadPropertyBoolean('BatteryPositiveIsCharge');
-        $battDisW = $posIsCharge ? max(0.0, -$battW) : max(0.0, $battW); // Entladung positiv
-
-        // Aktuelle WB-Leistung
-        $wbVid = @$this->GetIDForIdent('PowerToCar_W');
-        $wbW   = $wbVid ? max(0.0, (float)@GetValue($wbVid)) : (float)round(max(0.0, (float)$this->getWBPowerW()));
-
-        // Erkenntnis: HousePowerVarID == VarHouse_ID ⇒ „inkl. WB“
-        $varHouseInclWB = (int)$this->ReadPropertyInteger('VarHouse_ID');
-        $houseIsTotal   = ($varHouseInclWB > 0 && $varHouseInclWB === $houseID);
-
-        // Aktueller Netzbezug
-        $gridNowW = $houseIsTotal
-            ? max(0.0, $houseW          - $pvW - $battDisW)   // Haus enthält WB schon
-            : max(0.0, ($houseW + $wbW) - $pvW - $battDisW);  // Haus ohne WB → WB addieren
-
-        $restW = max(0.0, $limitW - $gridNowW);
+        $gridNowW = (float)@GetValue($gridVar);                // positiver Import
+        if (!is_finite($gridNowW)) $gridNowW = 0.0;
+        $restW = max(0.0, $limitW - max(0.0, $gridNowW));
 
         if ($desiredPowerW > $restW) {
             $this->dbgLog('HouseLimit', sprintf(
-                'houseIsTotal=%d house=%.0f pv=%.0f battDis=%.0f wb=%.0f gridNow=%.0f limit=%.0f rest=%.0f desired=%.0f -> set=%.0f',
-                (int)$houseIsTotal, $houseW, $pvW, $battDisW, $wbW, $gridNowW, $limitW, $restW, $desiredPowerW, $restW
+                'gridNow=%.0fW limit=%.0fW rest=%.0fW desired=%.0fW -> set=%.0fW',
+                $gridNowW, $limitW, $restW, $desiredPowerW, $restW
             ));
             return $restW;
         }
