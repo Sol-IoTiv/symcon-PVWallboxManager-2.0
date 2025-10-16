@@ -415,4 +415,11 @@ trait Helpers
         return (int)max(0, $pv - $battForCalc - $houseTotal + max(0, $wbW));
     }
 
+    private function writeAmpUIIfAllowed(int $a): void {
+        $mode = (int)@GetValue(@$this->GetIDForIdent('Mode')); // 0=PV,1=Manuell,2=Nur Anzeige,3=PV-Anteil
+        if ($mode !== 1) {
+            if ($vid=@$this->GetIDForIdent('Ampere_A')) @SetValue($vid, $a);
+        }
+    }
+
 }

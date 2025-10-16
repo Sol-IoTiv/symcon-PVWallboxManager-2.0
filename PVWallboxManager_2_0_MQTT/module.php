@@ -39,12 +39,11 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterPropertyString('VarBattery_Unit', 'W');
         $this->RegisterPropertyBoolean('BatteryPositiveIsCharge', true);
 
-        // --- Netz-/Strom-Parameter & Zeiten ---
         // --- Hauszuleitungs-Wächter ---
         $this->RegisterPropertyInteger('MaxGridPowerW', 0);
-        $this->RegisterPropertyInteger('GridImportVarID', 0);
+        $this->RegisterPropertyInteger('GridImportVarID', 0); // Variable Netzbezug (positiver Import, W)
 
-        // Batterie-Logik
+        // --- Batterie-Logik ---
         $this->RegisterPropertyInteger('VarBatterySoc_ID', 0);
         $this->RegisterPropertyInteger('BatteryMinSocForPV', 90);
         $this->RegisterPropertyInteger('BatteryReserveW', 300);
@@ -89,21 +88,22 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         $this->RegisterVariableInteger('Mode', 'Lademodus', 'PVWM.Mode', 5);
         $this->EnableAction('Mode');
 
+        // UI-Soll
         $this->RegisterVariableInteger('Ampere_A', 'Ampere [A]', 'GoE.Amp', 10);
         $this->EnableAction('Ampere_A');
 
-        // ... nach Ampere_A registrieren (Position anpassen nach Bedarf)
+        // Effektiv gesetzter Strom (nur Anzeige, keine Action)
+        $this->RegisterVariableInteger('AmpereEff_A', 'Ampere eff [A]', 'GoE.Amp', 11);
+
+        // Profil für PV-Anteil
         if (!IPS_VariableProfileExists('PVWM.Percent')) {
             IPS_CreateVariableProfile('PVWM.Percent', 1);
             IPS_SetVariableProfileValues('PVWM.Percent', 0, 100, 1);
             IPS_SetVariableProfileText('PVWM.Percent', '', ' %');
         }
 
-//        $this->RegisterPropertyInteger('PVShareDefaultPct', 50);
         $this->RegisterVariableInteger('PVShare_Pct', 'PV-Anteil', 'PVWM.Percent', 15);
         $this->EnableAction('PVShare_Pct');
-
-        // Default 50% nur, wenn (noch) kein gültiger Wert (0..100) vorliegt
         if ($vidShare = @$this->GetIDForIdent('PVShare_Pct')) {
             $v = (int)@GetValue($vidShare);
             if ($v < 0 || $v > 100) { @SetValue($vidShare, 50); }
@@ -121,9 +121,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         $this->RegisterVariableInteger('Uhrzeit', 'Uhrzeit', '~UnixTimestamp', 70);
         $this->RegisterVariableString('Regelziel', 'Regelziel', '', 80);
-//        $this->RegisterVariableString('Ladechart', 'Ladechart', '~HTMLBox', 900);
 
-        // --- Attribute (einmalig registrieren) ---
+        // --- Attribute ---
         $this->RegisterAttributeInteger('LastFrcChangeMs', 0);
         $this->RegisterAttributeInteger('WB_ActivePhases', 1);
         $this->RegisterAttributeInteger('WB_W_Smooth', 0);
@@ -607,8 +606,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
             if ($frc !== 2) { $this->dbgLog('MANUAL', 'frc→2'); $this->setFRC(2, 'manuell halten'); }
 
-            // WICHTIG: Ampere_A NICHT auf $aEff zurückschreiben.
-            // if ($vidA=@$this->GetIDForIdent('Ampere_A')) @SetValue($vidA, $aEff);  // ← löschen
+            // UI-Soll NICHT überschreiben. Nur Effektivwert publizieren.
+            if ($vidEff=@$this->GetIDForIdent('AmpereEff_A')) @SetValue($vidEff, $aEff);
 
             $this->WriteAttributeInteger('LastAmpSet',    $aEff);
             $this->WriteAttributeInteger('LastPublishMs', $nowMs);
@@ -678,7 +677,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                 $maxA      = (int)$this->ReadPropertyInteger('MaxAmp');
                 $lastCalcA = (int)$this->ReadAttributeInteger('Slow_LastCalcA'); // SLOW_TickUI schreibt das
 
-                // Hoch nur, wenn EMA lange genug hoch ODER (gleich), UND Ziel-Ampere am oberen Limit klebt
                 if ($pmCur === 1 && $p3 >= $need3 && $lastCalcA >= $maxA) {
                     $this->dbgLog('PHASE_DECIDE', sprintf('→ 3p (p3 %dms ≥ %dms & lastCalcA %d ≥ maxA %d)', $p3, $need3, $lastCalcA, $maxA));
                     $this->sendSet('psm', '2'); if ($vidPM=@$this->GetIDForIdent('Phasenmodus')) @SetValue($vidPM,3);
@@ -686,7 +684,6 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
                     $this->WriteAttributeInteger('LastCarState', $car);
                     return;
                 }
-                // Runter nur, wenn EMA lange genug niedrig ODER (gleich), UND Ziel-Ampere nahe Min
                 if ($pmCur === 3 && $p1 >= $need1 && $lastCalcA <= $minA + 1) {
                     $this->dbgLog('PHASE_DECIDE', sprintf('→ 1p (p1 %dms ≥ %dms & lastCalcA %d ≤ minA+1 %d)', $p1, $need1, $lastCalcA, $minA+1));
                     $this->sendSet('psm', '1'); if ($vidPM=@$this->GetIDForIdent('Phasenmodus')) @SetValue($vidPM,1);
@@ -730,15 +727,16 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
     }
 
     /**
-     * Netzlimit anhand positiver Import-Variable.
+     * Netzlimit auf Basis einer positiven Import-Variable (GridImportVarID).
      */
     private function applyHouseLimit($desiredPowerW) {
         $desiredPowerW = (float)$desiredPowerW;
-        $limitW  = (float)$this->ReadPropertyInteger('MaxGridPowerW');
-        $gridVar = (int)@$this->ReadPropertyInteger('GridImportVarID');
-        if ($limitW <= 0 || $gridVar <= 0) return (float)$desiredPowerW;
 
-        $gridNowW = (float)@GetValue($gridVar);
+        $limitW  = (float)$this->ReadPropertyInteger('MaxGridPowerW');
+        $gridVar = (int)$this->ReadPropertyInteger('GridImportVarID');
+        if ($limitW <= 0 || $gridVar <= 0) return $desiredPowerW;
+
+        $gridNowW = (float)@GetValue($gridVar);           // positiver Import
         if (!is_finite($gridNowW)) $gridNowW = 0.0;
 
         $restW = max(0.0, $limitW - max(0.0, $gridNowW));
