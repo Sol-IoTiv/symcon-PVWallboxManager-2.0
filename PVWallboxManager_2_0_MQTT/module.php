@@ -615,8 +615,8 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
         }
 
         // ===== PV-AUTOMATIK (Mode 0) & PV-ANTEIL (Mode 3) =====
-        $targetW    = (int)$this->ReadAttributeInteger('Slow_TargetW');
-        // Hauszuleitungsbegrenzung
+        $targetW    = (int)$this->ReadAttributeInteger('Slow_TargetW'); // vorhanden im Modul
+        // Netzlimit auf Ziel-Watt anwenden (nur Kappung, keine sonstige Logik verändert)
         $targetW    = (int)$this->applyHouseLimit((float)$targetW);
         $minTargetW = (int)$this->ReadPropertyInteger('TargetMinW');
 
