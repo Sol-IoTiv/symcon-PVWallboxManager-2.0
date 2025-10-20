@@ -54,7 +54,8 @@ trait MqttHandlersTrait
                 $new = (int)$payload;
                 $old = (int)@GetValue(@$this->GetIDForIdent('Ampere_A'));
                 if ($old !== $new) {
-                    $this->SetValueSafe('Ampere_A', $new);
+//                    $this->SetValueSafe('Ampere_A', $new);
+                    if ($vid=@$this->GetIDForIdent('AmpereEff_A')) @SetValue($vid, (int)$new);
                     $this->WriteAttributeInteger('LastAmpSet', $new);
                     $this->dbgChanged('Ampere @'.$topic, $old.' A', $new.' A');
                 }

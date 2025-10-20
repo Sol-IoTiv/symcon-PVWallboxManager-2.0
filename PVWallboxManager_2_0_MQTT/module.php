@@ -720,7 +720,9 @@ class PVWallboxManager_2_0_MQTT extends IPSModule
 
         $this->sendSet('psm', ($phForCalc >= 2) ? '2' : '1');  // 2-/3-phasig ⇒ '2'
         $this->sendSet('amp', (string)$nextA);
-        if ($vidA) @SetValue($vidA, $nextA);
+//        if ($vidA) @SetValue($vidA, $nextA);
+        if ($vidEff=@$this->GetIDForIdent('AmpereEff_A')) @SetValue($vidEff, (int)$nextA);
+        $this->writeAmpUIIfAllowed((int)$nextA);
         $this->WriteAttributeInteger('LastAmpSet',    $nextA);
         $this->WriteAttributeInteger('LastPublishMs', $nowMs);
         $this->WriteAttributeInteger('LastCarState',  $car);

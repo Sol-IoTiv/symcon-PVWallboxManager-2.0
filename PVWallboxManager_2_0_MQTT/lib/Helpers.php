@@ -198,7 +198,8 @@ trait Helpers
         if ($nextA !== $curA) {
             // hier deine Setz-API:
             $this->setCurrentLimitA($nextA);
-            if ($vid) @SetValue($vid, $nextA);
+//            if ($vid) @SetValue($vid, $nextA);
+            $this->writeAmpUIIfAllowed((int)$nextA); 
             $this->WriteAttributeInteger('LastAmpChangeMs', $nowMs);
             $this->dbgLog('RAMP', "Ampere: $curA A → $nextA A (Ziel $targetA A)");
         }
@@ -253,9 +254,10 @@ trait Helpers
         $this->WriteAttributeInteger('LastAmpSet', $amp);
         $this->WriteAttributeInteger('LastPublishMs', (int)(microtime(true) * 1000));
 
-        if ($vidA = @$this->GetIDForIdent('Ampere_A')) {
-            @SetValue($vidA, $amp); // Anzeige synchronisieren
+        if ($vidEff = @$this->GetIDForIdent('AmpereEff_A')) {
+            @SetValue($vidEff, (int)$amp);             // effektiv gesetzter Strom
         }
+        $this->writeAmpUIIfAllowed((int)$amp);        // UI nur außerhalb Manuell
         $this->dbgLog('setCurrentLimitA', "amp={$amp} A gesendet");
     }
 
